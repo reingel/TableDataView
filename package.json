@@ -1,0 +1,58 @@
+{
+  "name": "tabledataview",
+  "displayName": "TableDataView",
+  "description": "View CSV/TSV/DAT files as interactive tables with graph support",
+  "version": "0.1.1",
+  "publisher": "reingel",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Data Science", "Visualization"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "tableDataView.openTableView",
+        "title": "TableDataView: table view",
+        "category": "TableDataView"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "tableDataView.openTableView",
+          "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "tableDataView.openTableView",
+          "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "tableDataView.openTableView",
+          "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.1",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0"
+  }
+}
