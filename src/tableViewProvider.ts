@@ -154,7 +154,13 @@ export class TableViewProvider {
       top: 0;
       z-index: 5;
     }
-    th.selected, td.selected {
+    th.selected {
+      background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
+      box-shadow: inset 0 0 0 9999px var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.4));
+      color: var(--vscode-editor-foreground, var(--vscode-foreground));
+      font-weight: bold;
+    }
+    td.selected {
       background: var(--vscode-list-activeSelectionBackground);
       color: var(--vscode-list-activeSelectionForeground);
     }
@@ -171,6 +177,10 @@ export class TableViewProvider {
     .error-message {
       padding: 16px;
       color: var(--vscode-errorForeground, #f44);
+    }
+    td.crosshair-row {
+      outline: 2px solid var(--vscode-focusBorder, #007acc);
+      outline-offset: -2px;
     }
     #context-menu {
       position: fixed;
@@ -210,7 +220,23 @@ export class TableViewProvider {
       flex-shrink: 0;
     }
     #graph-title { flex: 1; font-weight: bold; }
-    #chart-canvas { flex: 1; min-height: 0; }
+    #graph-resize-handle {
+      height: 5px;
+      cursor: ns-resize;
+      background: var(--vscode-panel-border);
+      flex-shrink: 0;
+    }
+    #graph-resize-handle:hover { background: var(--vscode-focusBorder, #007acc); }
+    #graph-yvalues {
+      padding: 2px 8px;
+      font-size: 0.8em;
+      white-space: nowrap;
+      overflow-x: auto;
+      flex-shrink: 0;
+      line-height: 20px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    #chart-canvas { flex: 1; min-height: 0; cursor: crosshair; }
   </style>
 </head>
 <body>
@@ -243,11 +269,23 @@ export class TableViewProvider {
   </div>
 
   <div id="graph-container" class="hidden">
+    <div id="graph-resize-handle"></div>
     <div id="graph-header">
       <span id="graph-title">Graph</span>
       <button id="btn-toggle-chart-type">Switch to Bar</button>
+      <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
+        Line width
+        <select id="sel-line-width" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
+          <option value="0.5">0.5</option>
+          <option value="1" selected>1.0</option>
+          <option value="1.5">1.5</option>
+          <option value="2">2.0</option>
+          <option value="3">3.0</option>
+        </select>
+      </label>
       <button id="btn-close-graph">&#x2715; Close</button>
     </div>
+    <div id="graph-yvalues" class="hidden"></div>
     <canvas id="chart-canvas"></canvas>
   </div>
 

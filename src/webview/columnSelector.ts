@@ -38,7 +38,7 @@ export function applyAlignment(align: Alignment): void {
   if (cols.length > 0) setAlignment(cols, align);
 }
 
-function applyHighlight(): void {
+export function applyHighlight(): void {
   for (let i = 0; i < totalColumns; i++) {
     const cells = document.querySelectorAll<HTMLElement>(`[data-col-index="${i}"]`);
     const isSelected = selectedColumns.has(i);
