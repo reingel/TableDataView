@@ -8,16 +8,21 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
 - Open any `.csv`, `.tsv`, `.txt`, or `.dat` file as an interactive table
 - Automatic delimiter detection (comma, tab, semicolon, pipe, space)
 - Automatic header detection — if the first row contains non-numeric values, it is used as column headers
-- Virtual scrolling for large files (up to 10,000 rows rendered efficiently)
-- Column alignment: left, center, or right via right-click context menu
+- Virtual scrolling for large files with no row limit
+- All columns are left-aligned
 
 ### Column Selection
-- Click a column header or any cell to select that column
+- The first column (column 0) is always selected and pinned — it stays fixed while scrolling horizontally
+- Click a column header or any cell to select that column (column 0 remains selected)
 - **Shift+click** to select a range of columns
 - **Ctrl/Cmd+click** to toggle individual columns in a multi-selection
 
+### Navigation
+- **Top** button: jump to the first row
+- **Bottom** button: jump to the last row
+
 ### Graph View
-- Select one or more columns, then right-click and choose **Show graph**
+- Select one or more columns, then click **Show Graph** or right-click and choose **Show graph**
 - If column 0 is included in the selection alongside other columns, it is used as the X-axis
 - Supports line and bar chart types (toggle button in the graph panel)
 - Adjustable line width
@@ -43,10 +48,6 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
 
 - Visual Studio Code `^1.85.0`
 
-## Extension Settings
+## License
 
-This extension does not add any VS Code settings.
-
-## Known Limitations
-
-- Graph view supports numeric data only; non-numeric columns are skipped when plotting
+[MIT](LICENSE.md)

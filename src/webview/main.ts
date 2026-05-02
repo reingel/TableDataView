@@ -1,6 +1,6 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow } from './tableRenderer';
-import { getSelected, applyAlignment } from './columnSelector';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData } from './tableRenderer';
+import { getSelected } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, toggleChartType, closeGraph, setLineWidth, setRowHighlightCallback } from './graphRenderer';
 
@@ -80,9 +80,11 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
   });
 
-  document.getElementById('btn-align-left')!.addEventListener('click', () => applyAlignment('left'));
-  document.getElementById('btn-align-center')!.addEventListener('click', () => applyAlignment('center'));
-  document.getElementById('btn-align-right')!.addEventListener('click', () => applyAlignment('right'));
+  document.getElementById('btn-top')!.addEventListener('click', () => scrollToRow(0));
+  document.getElementById('btn-bottom')!.addEventListener('click', () => {
+    const data = getData();
+    if (data) scrollToRow(data.rows.length - 1);
+  });
   document.getElementById('btn-show-graph')!.addEventListener('click', handleShowGraph);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();

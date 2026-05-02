@@ -1,6 +1,5 @@
 import { ParsedFile } from '../types';
 import { init as initSelector, handleColumnClick, applyHighlight, getSelected } from './columnSelector';
-import { applyAll, reset as resetAlignment } from './alignmentController';
 
 const BUFFER = 40;
 let ROW_HEIGHT = 24;
@@ -36,7 +35,6 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   crosshairRowIdx = null;
   crosshairColIdxs = [];
 
-  resetAlignment();
   initSelector(data.headers.length, onSelectionChange);
 
   const headerRow = document.getElementById('header-row')!;
@@ -51,7 +49,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     const th = document.createElement('th');
     th.textContent = header;
     th.dataset.colIndex = String(colIdx);
-    th.className = 'align-left';
+    th.className = colIdx === 0 ? 'align-left col-first' : 'align-left';
     th.addEventListener('click', e => handleColumnClick(colIdx, e as MouseEvent));
     headerRow.appendChild(th);
   });
@@ -68,6 +66,10 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     if (firstRow) {
       const h = firstRow.getBoundingClientRect().height;
       if (h > 0) ROW_HEIGHT = h;
+    }
+    const rowNumCell = document.querySelector('th.row-num-cell') as HTMLElement | null;
+    if (rowNumCell) {
+      document.documentElement.style.setProperty('--row-num-width', `${rowNumCell.offsetWidth}px`);
     }
   });
 }
@@ -124,7 +126,7 @@ function renderBody(): void {
       const td = document.createElement('td');
       td.textContent = row[j];
       td.dataset.colIndex = String(j);
-      td.className = 'align-left';
+      td.className = j === 0 ? 'align-left col-first' : 'align-left';
       td.addEventListener('click', e => handleColumnClick(j, e as MouseEvent));
       tr.appendChild(td);
     }
@@ -141,7 +143,6 @@ function renderBody(): void {
     tbody.appendChild(tr);
   }
 
-  applyAll(colCount);
   applyHighlight();
   applyRowHighlight();
 }

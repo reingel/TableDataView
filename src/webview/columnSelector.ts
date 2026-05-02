@@ -1,5 +1,3 @@
-import { setAlignment, Alignment } from './alignmentController';
-
 const selectedColumns = new Set<number>();
 let lastClickedIndex: number | null = null;
 let totalColumns = 0;
@@ -9,6 +7,7 @@ export function init(colCount: number, onChange: () => void): void {
   totalColumns = colCount;
   onSelectionChange = onChange;
   selectedColumns.clear();
+  if (colCount > 0) selectedColumns.add(0);
   lastClickedIndex = null;
 }
 
@@ -28,14 +27,10 @@ export function handleColumnClick(colIndex: number, event: MouseEvent): void {
     selectedColumns.clear();
     selectedColumns.add(colIndex);
   }
+  selectedColumns.add(0);
   lastClickedIndex = colIndex;
   applyHighlight();
   onSelectionChange?.();
-}
-
-export function applyAlignment(align: Alignment): void {
-  const cols = getSelected();
-  if (cols.length > 0) setAlignment(cols, align);
 }
 
 export function applyHighlight(): void {
@@ -50,6 +45,7 @@ export function applyHighlight(): void {
 
 export function reset(): void {
   selectedColumns.clear();
+  if (totalColumns > 0) selectedColumns.add(0);
   lastClickedIndex = null;
   applyHighlight();
   onSelectionChange?.();

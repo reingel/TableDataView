@@ -1,6 +1,3 @@
-import { applyAlignment } from './columnSelector';
-import { Alignment } from './alignmentController';
-
 let menuEl: HTMLElement;
 let onShowGraph: (() => void) | null = null;
 
@@ -11,21 +8,6 @@ export function init(showGraphCallback: () => void): void {
   document.getElementById('ctx-show-graph')!.addEventListener('click', () => {
     hide();
     onShowGraph?.();
-  });
-
-  document.getElementById('ctx-align-left')!.addEventListener('click', () => {
-    hide();
-    applyAlignment('left');
-  });
-
-  document.getElementById('ctx-align-center')!.addEventListener('click', () => {
-    hide();
-    applyAlignment('center');
-  });
-
-  document.getElementById('ctx-align-right')!.addEventListener('click', () => {
-    hide();
-    applyAlignment('right');
   });
 
   document.addEventListener('click', () => hide());

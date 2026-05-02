@@ -169,6 +169,29 @@ export class TableViewProvider {
       font-size: 0.85em;
       cursor: default;
       min-width: 40px;
+      position: sticky;
+      left: 0;
+      z-index: 3;
+      background: var(--vscode-editor-background);
+    }
+    th.row-num-cell {
+      background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
+      z-index: 7;
+    }
+    .col-first {
+      position: sticky;
+      left: var(--row-num-width, 60px);
+      z-index: 2;
+      background: var(--vscode-editor-background);
+    }
+    th.col-first {
+      background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
+      z-index: 6;
+    }
+    td.col-first.selected {
+      background: var(--vscode-editor-background);
+      box-shadow: inset 0 0 0 9999px var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.4));
+      color: var(--vscode-list-activeSelectionForeground);
     }
     .align-left   { text-align: left; }
     .align-center { text-align: center; }
@@ -245,9 +268,8 @@ export class TableViewProvider {
     <span id="delimiter-info"></span>
     <span id="truncate-notice" class="hidden"></span>
     <div class="toolbar-sep"></div>
-    <button id="btn-align-left" title="Align left">&#8676; Left</button>
-    <button id="btn-align-center" title="Align center">&#8677; Center</button>
-    <button id="btn-align-right" title="Align right">&#8677; Right</button>
+    <button id="btn-top">Top</button>
+    <button id="btn-bottom">Bottom</button>
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
   </div>
@@ -262,9 +284,6 @@ export class TableViewProvider {
   <div id="context-menu" class="hidden">
     <ul>
       <li id="ctx-show-graph">Show graph</li>
-      <li id="ctx-align-left">Align left</li>
-      <li id="ctx-align-center">Align center</li>
-      <li id="ctx-align-right">Align right</li>
     </ul>
   </div>
 
