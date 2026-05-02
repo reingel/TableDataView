@@ -1,7 +1,6 @@
 import * as path from 'path';
 import { ParsedFile } from './types';
 
-const MAX_ROWS = 10000;
 const SAMPLE_LINES = 20;
 
 const DELIMITER_CANDIDATES = [
@@ -122,15 +121,14 @@ export function parseFile(content: string, filePath: string): ParsedFile {
   });
 
   const totalRows = normalizedRows.length;
-  const truncated = totalRows > MAX_ROWS;
 
   return {
     fileName: path.basename(filePath),
     headers,
-    rows: truncated ? normalizedRows.slice(0, MAX_ROWS) : normalizedRows,
+    rows: normalizedRows,
     hasHeader,
     delimiter,
-    truncated,
+    truncated: false,
     totalRows,
   };
 }
