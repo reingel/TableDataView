@@ -1,4 +1,4 @@
-declare const Chart: any;
+import Chart from 'chart.js/auto';
 
 const MAX_CHART_POINTS = 2000;
 

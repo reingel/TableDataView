@@ -77,7 +77,7 @@ export class TableViewProvider {
     const nonce = getNonce();
     const csp = [
       `default-src 'none'`,
-      `script-src 'nonce-${nonce}' https://cdn.jsdelivr.net`,
+      `script-src 'nonce-${nonce}'`,
       `style-src 'unsafe-inline'`,
       `img-src data: blob:`,
     ].join('; ');
@@ -308,7 +308,6 @@ export class TableViewProvider {
     <canvas id="chart-canvas"></canvas>
   </div>
 
-  <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
