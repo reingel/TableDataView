@@ -2,7 +2,7 @@
   "name": "tabledataview",
   "displayName": "TableDataView",
   "description": "View CSV/TSV/DAT files as interactive tables with graph support",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "publisher": "reingel",
   "repository": {
     "type": "git",
@@ -11,6 +11,7 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "icon.png",
   "categories": ["Data Science", "Visualization"],
   "main": "./out/extension.js",
   "activationEvents": [],
