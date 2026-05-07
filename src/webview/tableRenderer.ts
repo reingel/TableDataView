@@ -30,12 +30,36 @@ export function scrollToRow(rowIdx: number): void {
   scheduleRender();
 }
 
+function fixStickyWidths(data: ParsedFile): void {
+  const PX_PER_CHAR = 9;
+  const PADDING = 24;
+
+  const rowNumPx = Math.max(String(data.rows.length).length * PX_PER_CHAR + PADDING, 40);
+  document.documentElement.style.setProperty('--row-num-width', `${rowNumPx}px`);
+
+  const n = data.rows.length;
+  const s = Math.min(100, n);
+  let maxLen = data.headers[0]?.length ?? 0;
+  for (let i = 0; i < s; i++) {
+    const v = data.rows[i]?.[0];
+    if (v && v.length > maxLen) maxLen = v.length;
+  }
+  for (let i = Math.max(s, n - 100); i < n; i++) {
+    const v = data.rows[i]?.[0];
+    if (v && v.length > maxLen) maxLen = v.length;
+  }
+  const colFirstPx = Math.max(maxLen * PX_PER_CHAR + PADDING, 50);
+  document.documentElement.style.setProperty('--col-first-width', `${colFirstPx}px`);
+}
+
 export function render(data: ParsedFile, onSelectionChange: () => void): void {
   currentData = data;
   crosshairRowIdx = null;
   crosshairColIdxs = [];
 
   initSelector(data.headers.length, onSelectionChange);
+
+  fixStickyWidths(data);
 
   const headerRow = document.getElementById('header-row')!;
   headerRow.innerHTML = '';
@@ -67,9 +91,9 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
       const h = firstRow.getBoundingClientRect().height;
       if (h > 0) ROW_HEIGHT = h;
     }
-    const rowNumCell = document.querySelector('th.row-num-cell') as HTMLElement | null;
-    if (rowNumCell) {
-      document.documentElement.style.setProperty('--row-num-width', `${rowNumCell.offsetWidth}px`);
+    const rowNumTh = document.querySelector('th.row-num-cell') as HTMLElement | null;
+    if (rowNumTh) {
+      document.documentElement.style.setProperty('--row-num-width', `${rowNumTh.offsetWidth}px`);
     }
   });
 }

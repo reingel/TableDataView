@@ -31,7 +31,7 @@ export class TableViewProvider {
     const panel = vscode.window.createWebviewPanel(
       'tableDataView',
       path.basename(uri.fsPath),
-      vscode.ViewColumn.Beside,
+      vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.Active,
       {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'out')],
@@ -137,16 +137,24 @@ export class TableViewProvider {
       flex: 1;
     }
     table {
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       width: max-content;
       min-width: 100%;
     }
     th, td {
       padding: 3px 10px;
-      border: 1px solid var(--vscode-panel-border, #444);
+      border-right: 1px solid var(--vscode-panel-border, #444);
+      border-bottom: 1px solid var(--vscode-panel-border, #444);
       white-space: nowrap;
       cursor: pointer;
       user-select: none;
+    }
+    th:first-child, td:first-child {
+      border-left: 1px solid var(--vscode-panel-border, #444);
+    }
+    thead th {
+      border-top: 1px solid var(--vscode-panel-border, #444);
     }
     th {
       background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
@@ -168,11 +176,14 @@ export class TableViewProvider {
       color: var(--vscode-descriptionForeground);
       font-size: 0.85em;
       cursor: default;
-      min-width: 40px;
+      width: var(--row-num-width, 40px);
+      min-width: var(--row-num-width, 40px);
+      max-width: var(--row-num-width, 40px);
+      overflow: hidden;
       position: sticky;
       left: 0;
       z-index: 3;
-      background: var(--vscode-editor-background);
+      background: var(--vscode-editor-background, #1e1e1e);
     }
     th.row-num-cell {
       background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
@@ -182,14 +193,19 @@ export class TableViewProvider {
       position: sticky;
       left: var(--row-num-width, 60px);
       z-index: 2;
-      background: var(--vscode-editor-background);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: var(--vscode-editor-background, #1e1e1e);
+      width: var(--col-first-width, 120px);
+      min-width: var(--col-first-width, 120px);
+      max-width: var(--col-first-width, 120px);
     }
     th.col-first {
       background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
       z-index: 6;
     }
     td.col-first.selected {
-      background: var(--vscode-editor-background);
+      background: var(--vscode-editor-background, #1e1e1e);
       box-shadow: inset 0 0 0 9999px var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.4));
       color: var(--vscode-list-activeSelectionForeground);
     }
