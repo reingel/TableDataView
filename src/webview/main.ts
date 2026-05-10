@@ -2,7 +2,7 @@ import { ExtensionToWebviewMessage, ParsedFile } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight } from './tableRenderer';
 import { getSelected } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, toggleChartType, closeGraph, setLineWidth, setRowHighlightCallback } from './graphRenderer';
+import { renderGraph, toggleChartType, closeGraph, setLineWidth, setRowHighlightCallback, updateViewport } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -25,6 +25,7 @@ function handleShowGraph(): void {
   const selected = getSelected();
   if (selected.length === 0) return;
   renderGraph(currentData.headers, currentData.rows, selected);
+  syncViewport();
 }
 
 window.addEventListener('message', (event: MessageEvent) => {
@@ -58,6 +59,16 @@ function escapeHtml(str: string): string {
 function highlightTableRow(rowIdx: number): void {
   setCrosshairRow(rowIdx, getSelected());
   scrollToRow(rowIdx);
+}
+
+function syncViewport(): void {
+  const graphContainer = document.getElementById('graph-container')!;
+  if (graphContainer.classList.contains('hidden')) return;
+  const container = document.getElementById('table-container')!;
+  const rh = getRowHeight();
+  const startRow = Math.floor(container.scrollTop / rh);
+  const endRow = Math.ceil((container.scrollTop + container.clientHeight) / rh);
+  updateViewport(startRow, endRow);
 }
 
 function getColSnapPositions(): number[] {
@@ -157,6 +168,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('sel-line-width')!.addEventListener('change', e => {
     setLineWidth(parseFloat((e.target as HTMLSelectElement).value));
   });
+
+  document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 
   document.getElementById('table-container')!.addEventListener('contextmenu', e => {
     e.preventDefault();

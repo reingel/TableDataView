@@ -13,6 +13,8 @@ let displayRows: string[][] = [];
 let rowIndexMap: number[] = [];
 let rowHighlightCallback: ((rowIdx: number) => void) | null = null;
 let canvasListenerAdded = false;
+let viewportStartRow: number = 0;
+let viewportEndRow: number = 0;
 
 export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
@@ -32,6 +34,32 @@ function decimateRows(rows: string[][]): { display: string[][], map: number[] } 
   }
   return { display, map };
 }
+
+const viewportPlugin = {
+  id: 'viewportBox',
+  afterDraw(chart: any) {
+    if (displayRows.length === 0) return;
+    const meta = chart.getDatasetMeta(0);
+    if (!meta || !meta.data.length) return;
+    const totalRows = lastRows.length;
+    const dispLen = displayRows.length;
+    const toDispIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
+    const startIdx = Math.max(0, toDispIdx(viewportStartRow));
+    const endIdx = Math.min(dispLen - 1, toDispIdx(viewportEndRow));
+    const startX = meta.data[startIdx]?.x;
+    const endX = meta.data[endIdx]?.x;
+    if (startX === undefined || endX === undefined || endX <= startX) return;
+    const { top, bottom } = chart.chartArea;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(startX, top, endX - startX, bottom - top);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(startX, top, endX - startX, bottom - top);
+    ctx.restore();
+  },
+};
 
 const crosshairPlugin = {
   id: 'crosshairLine',
@@ -150,13 +178,19 @@ function redraw(): void {
         y: { title: { display: true, text: 'Value' }, grid: { color: 'rgba(128,128,128,0.3)' } },
       },
     },
-    plugins: [crosshairPlugin],
+    plugins: [viewportPlugin, crosshairPlugin],
   });
 
   document.getElementById('btn-toggle-chart-type')!.textContent =
     chartType === 'line' ? 'Switch to Bar' : 'Switch to Line';
 
   if (crosshairIndex !== null) updateYValues();
+}
+
+export function updateViewport(startRow: number, endRow: number): void {
+  viewportStartRow = startRow;
+  viewportEndRow = endRow;
+  if (chartInstance) chartInstance.update('none');
 }
 
 export function setLineWidth(width: number): void {
