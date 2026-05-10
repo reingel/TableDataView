@@ -41,6 +41,13 @@
           "group": "navigation"
         }
       ],
+      "editor/title/context": [
+        {
+          "command": "tableDataView.openTableView",
+          "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat",
+          "group": "navigation"
+        }
+      ],
       "commandPalette": [
         {
           "command": "tableDataView.openTableView",
