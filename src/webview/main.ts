@@ -90,6 +90,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const data = getData();
     if (data) scrollToRow(data.rows.length - 1);
   });
+  document.getElementById('btn-left')!.addEventListener('click', () => {
+    document.getElementById('table-container')!.scrollLeft = 0;
+  });
+  document.getElementById('btn-right')!.addEventListener('click', () => {
+    const c = document.getElementById('table-container')!;
+    c.scrollLeft = c.scrollWidth;
+  });
   document.getElementById('btn-show-graph')!.addEventListener('click', handleShowGraph);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();

@@ -163,6 +163,15 @@ export class TableViewProvider {
       top: 0;
       z-index: 5;
     }
+    #col-index-row th {
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.8em;
+      font-weight: normal;
+      top: 0;
+    }
+    #header-row th {
+      top: var(--col-index-height, 0px);
+    }
     th.selected {
       background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
       box-shadow: inset 0 0 0 9999px var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.4));
@@ -283,13 +292,18 @@ export class TableViewProvider {
     <div class="toolbar-sep"></div>
     <button id="btn-top">Top</button>
     <button id="btn-bottom">Bottom</button>
+    <button id="btn-left">Left</button>
+    <button id="btn-right">Right</button>
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
   </div>
 
   <div id="table-container">
     <table id="data-table">
-      <thead><tr id="header-row"></tr></thead>
+      <thead>
+        <tr id="col-index-row"></tr>
+        <tr id="header-row"></tr>
+      </thead>
       <tbody id="data-body"></tbody>
     </table>
   </div>

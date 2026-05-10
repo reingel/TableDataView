@@ -61,6 +61,18 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
 
   fixStickyWidths(data);
 
+  const colIndexRow = document.getElementById('col-index-row')!;
+  colIndexRow.innerHTML = '';
+  const thColIndexEmpty = document.createElement('th');
+  thColIndexEmpty.className = 'row-num-cell align-right';
+  colIndexRow.appendChild(thColIndexEmpty);
+  data.headers.forEach((_, colIdx) => {
+    const th = document.createElement('th');
+    th.textContent = String(colIdx + 1);
+    th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
+    colIndexRow.appendChild(th);
+  });
+
   const headerRow = document.getElementById('header-row')!;
   headerRow.innerHTML = '';
 
@@ -94,6 +106,10 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     const rowNumTh = document.querySelector('th.row-num-cell') as HTMLElement | null;
     if (rowNumTh) {
       document.documentElement.style.setProperty('--row-num-width', `${rowNumTh.offsetWidth}px`);
+    }
+    const colIndexRowEl = document.getElementById('col-index-row');
+    if (colIndexRowEl) {
+      document.documentElement.style.setProperty('--col-index-height', `${colIndexRowEl.getBoundingClientRect().height}px`);
     }
   });
 }
