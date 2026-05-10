@@ -12,8 +12,12 @@ const vscode = acquireVsCodeApi();
 let currentData: ParsedFile | null = null;
 
 function updateToolbar(): void {
-  const hasSelection = getSelected().length > 0;
-  (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = !hasSelection;
+  const selected = getSelected();
+  (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
+  const graphContainer = document.getElementById('graph-container')!;
+  if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
+    renderGraph(currentData.headers, currentData.rows, selected);
+  }
 }
 
 function handleShowGraph(): void {
