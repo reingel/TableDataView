@@ -2,17 +2,38 @@ const selectedColumns = new Set<number>();
 let lastClickedIndex: number | null = null;
 let totalColumns = 0;
 let onSelectionChange: (() => void) | null = null;
+let xAxisCol: number = 0;
 
 export function init(colCount: number, onChange: () => void): void {
   totalColumns = colCount;
   onSelectionChange = onChange;
   selectedColumns.clear();
+  xAxisCol = 0;
   if (colCount > 0) selectedColumns.add(0);
   lastClickedIndex = null;
 }
 
 export function getSelected(): number[] {
   return Array.from(selectedColumns);
+}
+
+export function getXAxisCol(): number {
+  return xAxisCol;
+}
+
+export function setXAxisCol(col: number): void {
+  selectedColumns.delete(xAxisCol);
+  xAxisCol = col;
+  selectedColumns.add(xAxisCol);
+  applyHighlight();
+  onSelectionChange?.();
+}
+
+export function resetXAxis(): void {
+  xAxisCol = 0;
+  selectedColumns.add(0);
+  applyHighlight();
+  onSelectionChange?.();
 }
 
 export function handleColumnClick(colIndex: number, event: MouseEvent): void {
@@ -27,7 +48,7 @@ export function handleColumnClick(colIndex: number, event: MouseEvent): void {
     selectedColumns.clear();
     selectedColumns.add(colIndex);
   }
-  selectedColumns.add(0);
+  selectedColumns.add(xAxisCol);
   lastClickedIndex = colIndex;
   applyHighlight();
   onSelectionChange?.();
@@ -36,15 +57,18 @@ export function handleColumnClick(colIndex: number, event: MouseEvent): void {
 export function applyHighlight(): void {
   for (let i = 0; i < totalColumns; i++) {
     const cells = document.querySelectorAll<HTMLElement>(`[data-col-index="${i}"]`);
-    const isSelected = selectedColumns.has(i);
+    const isXAxis = i === xAxisCol;
+    const isSelected = selectedColumns.has(i) && !isXAxis;
     cells.forEach(cell => {
       cell.classList.toggle('selected', isSelected);
+      cell.classList.toggle('x-axis', isXAxis);
     });
   }
 }
 
 export function reset(): void {
   selectedColumns.clear();
+  xAxisCol = 0;
   if (totalColumns > 0) selectedColumns.add(0);
   lastClickedIndex = null;
   applyHighlight();
