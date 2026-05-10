@@ -132,6 +132,12 @@ export class TableViewProvider {
     }
     button:hover { background: var(--vscode-button-hoverBackground); }
     button:disabled { opacity: 0.4; cursor: default; }
+    #btn-reset-all {
+      margin-left: 14px;
+      background: var(--vscode-inputValidation-warningBackground, #6b3600);
+      color: var(--vscode-inputValidation-warningForeground, #fff);
+    }
+    #btn-reset-all:hover { background: var(--vscode-editorWarning-foreground, #b87000); }
     #table-container {
       overflow: auto;
       flex: 1;
@@ -248,6 +254,17 @@ export class TableViewProvider {
       font-size: 0.9em;
     }
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
+    th.x-axis {
+      box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.35);
+      color: var(--vscode-editor-foreground, var(--vscode-foreground));
+      font-weight: bold;
+    }
+    td.x-axis {
+      box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.25);
+      color: var(--vscode-editor-foreground, var(--vscode-foreground));
+    }
+    th.diff-col { color: #7ec8a0; }
+    td.diff-col { color: #7ec8a0; }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;
@@ -296,6 +313,7 @@ export class TableViewProvider {
     <button id="btn-right">Right</button>
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
+    <button id="btn-reset-all" class="hidden">Reset All</button>
   </div>
 
   <div id="table-container">
@@ -310,7 +328,10 @@ export class TableViewProvider {
 
   <div id="context-menu" class="hidden">
     <ul>
-      <li id="ctx-show-graph">Show graph</li>
+      <li id="ctx-reset-xaxis">Reset x-axis</li>
+      <li id="ctx-set-xaxis">Set as x-axis</li>
+      <li id="ctx-show-diff">Show numerical differences</li>
+      <li id="ctx-show-original">Show original values</li>
     </ul>
   </div>
 
@@ -318,7 +339,6 @@ export class TableViewProvider {
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
       <span id="graph-title">Graph</span>
-      <button id="btn-toggle-chart-type">Switch to Bar</button>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width
         <select id="sel-line-width" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">

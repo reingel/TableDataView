@@ -1,8 +1,8 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight } from './tableRenderer';
-import { getSelected } from './columnSelector';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff } from './tableRenderer';
+import { getSelected, getXAxisCol, setXAxisCol, resetXAxis } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, toggleChartType, closeGraph, setLineWidth, setRowHighlightCallback, updateViewport } from './graphRenderer';
+import { renderGraph, closeGraph, setLineWidth, setRowHighlightCallback, updateViewport } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -14,17 +14,33 @@ let currentData: ParsedFile | null = null;
 function updateToolbar(): void {
   const selected = getSelected();
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
+  const hasCustomState = getXAxisCol() !== 0 || hasDiff();
+  document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
-    renderGraph(currentData.headers, currentData.rows, selected);
+    renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
   }
+}
+
+function getEffectiveRows(): string[][] {
+  if (!currentData) return [];
+  if (currentData.rows.length === 0) return [];
+  return currentData.rows.map((row, i) =>
+    row.map((val, j) => {
+      if (!isDiff(j)) return val;
+      if (i === 0) return '0';
+      const curr = parseFloat(val);
+      const prev = parseFloat(currentData!.rows[i - 1][j]);
+      return (!isNaN(curr) && !isNaN(prev)) ? String(curr - prev) : val;
+    })
+  );
 }
 
 function handleShowGraph(): void {
   if (!currentData) return;
   const selected = getSelected();
   if (selected.length === 0) return;
-  renderGraph(currentData.headers, currentData.rows, selected);
+  renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
   syncViewport();
 }
 
@@ -124,7 +140,12 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  initContextMenu(handleShowGraph);
+  initContextMenu({
+    resetXAxis: () => { resetXAxis(); updateToolbar(); },
+    setXAxis: (col) => { setXAxisCol(col); updateToolbar(); },
+    showDiff: (col) => { setDiff(col); updateToolbar(); },
+    showOriginal: (col) => { clearDiff(col); updateToolbar(); },
+  });
 
   setRowHighlightCallback(highlightTableRow);
 
@@ -160,12 +181,16 @@ document.addEventListener('DOMContentLoaded', () => {
     c.scrollLeft = c.scrollWidth;
   });
   document.getElementById('btn-show-graph')!.addEventListener('click', handleShowGraph);
+  document.getElementById('btn-reset-all')!.addEventListener('click', () => {
+    resetXAxis();
+    clearAllDiff();
+    updateToolbar();
+  });
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
     setCrosshairRow(null, []);
   });
-  document.getElementById('btn-toggle-chart-type')!.addEventListener('click', toggleChartType);
-  document.getElementById('sel-line-width')!.addEventListener('change', e => {
+document.getElementById('sel-line-width')!.addEventListener('change', e => {
     setLineWidth(parseFloat((e.target as HTMLSelectElement).value));
   });
 
@@ -173,7 +198,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('table-container')!.addEventListener('contextmenu', e => {
     e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, getSelected().length > 0);
+    const target = e.target as HTMLElement;
+    const colIndexStr = target.closest<HTMLElement>('[data-col-index]')?.dataset.colIndex;
+    const colIndex = colIndexStr !== undefined ? parseInt(colIndexStr) : -1;
+    showContextMenu(e.clientX, e.clientY, colIndex, {
+      isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
+      isDiff: colIndex >= 0 && isDiff(colIndex),
+      xAxisIsDefault: getXAxisCol() === 0,
+    });
   });
 
   vscode.postMessage({ type: 'ready' });

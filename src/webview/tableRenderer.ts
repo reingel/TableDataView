@@ -8,6 +8,7 @@ let currentData: ParsedFile | null = null;
 let crosshairRowIdx: number | null = null;
 let crosshairColIdxs: number[] = [];
 let renderPending = false;
+const diffCols = new Set<number>();
 
 export function getData(): ParsedFile | null {
   return currentData;
@@ -15,6 +16,40 @@ export function getData(): ParsedFile | null {
 
 export function getRowHeight(): number {
   return ROW_HEIGHT;
+}
+
+export function isDiff(col: number): boolean {
+  return diffCols.has(col);
+}
+
+export function hasDiff(): boolean {
+  return diffCols.size > 0;
+}
+
+export function setDiff(col: number): void {
+  diffCols.add(col);
+  applyDiffHeader(col);
+  scheduleRender();
+}
+
+export function clearDiff(col: number): void {
+  diffCols.delete(col);
+  applyDiffHeader(col);
+  scheduleRender();
+}
+
+export function clearAllDiff(): void {
+  const cols = Array.from(diffCols);
+  diffCols.clear();
+  cols.forEach(col => applyDiffHeader(col));
+  scheduleRender();
+}
+
+function applyDiffHeader(col: number): void {
+  const isDiffCol = diffCols.has(col);
+  document.querySelectorAll<HTMLElement>(`#col-index-row [data-col-index="${col}"], #header-row [data-col-index="${col}"]`).forEach(el => {
+    el.classList.toggle('diff-col', isDiffCol);
+  });
 }
 
 export function setCrosshairRow(rowIdx: number | null, colIdxs: number[]): void {
@@ -60,6 +95,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   currentData = data;
   crosshairRowIdx = null;
   crosshairColIdxs = [];
+  diffCols.clear();
 
   initSelector(data.headers.length, onSelectionChange);
 
@@ -73,6 +109,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   data.headers.forEach((_, colIdx) => {
     const th = document.createElement('th');
     th.textContent = String(colIdx + 1);
+    th.dataset.colIndex = String(colIdx);
     th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
     colIndexRow.appendChild(th);
   });
@@ -132,6 +169,16 @@ function scheduleRender(): void {
   }
 }
 
+function getDiffValue(rowIdx: number, colIdx: number): string {
+  if (!currentData) return '';
+  const row = currentData.rows[rowIdx];
+  if (rowIdx === 0) return '0';
+  const curr = parseFloat(row[colIdx]);
+  const prev = parseFloat(currentData.rows[rowIdx - 1][colIdx]);
+  if (isNaN(curr) || isNaN(prev)) return row[colIdx];
+  return String(curr - prev);
+}
+
 function renderBody(): void {
   if (!currentData) return;
   const container = document.getElementById('table-container')!;
@@ -168,9 +215,12 @@ function renderBody(): void {
 
     for (let j = 0; j < row.length; j++) {
       const td = document.createElement('td');
-      td.textContent = row[j];
+      const inDiff = diffCols.has(j);
+      td.textContent = inDiff ? getDiffValue(i, j) : row[j];
       td.dataset.colIndex = String(j);
-      td.className = j === 0 ? 'align-left col-first' : 'align-left';
+      let cls = j === 0 ? 'align-left col-first' : 'align-left';
+      if (inDiff) cls += ' diff-col';
+      td.className = cls;
       td.addEventListener('click', e => handleColumnClick(j, e as MouseEvent));
       tr.appendChild(td);
     }
