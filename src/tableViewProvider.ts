@@ -135,6 +135,7 @@ export class TableViewProvider {
     #table-container {
       overflow: auto;
       flex: 1;
+      min-height: 0;
     }
     table {
       border-collapse: separate;
@@ -239,16 +240,12 @@ export class TableViewProvider {
     }
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
     #graph-container {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      height: 42%;
+      flex-shrink: 0;
+      height: 42vh;
       background: var(--vscode-editor-background);
       border-top: 2px solid var(--vscode-panel-border);
       display: flex;
       flex-direction: column;
-      z-index: 50;
     }
     #graph-header {
       display: flex;

@@ -56,6 +56,7 @@ function highlightTableRow(rowIdx: number): void {
   scrollToRow(rowIdx);
 }
 
+
 document.addEventListener('DOMContentLoaded', () => {
   initContextMenu(handleShowGraph);
 
