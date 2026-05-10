@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight } from './tableRenderer';
 import { getSelected } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, toggleChartType, closeGraph, setLineWidth, setRowHighlightCallback } from './graphRenderer';
@@ -60,6 +60,57 @@ function highlightTableRow(rowIdx: number): void {
   scrollToRow(rowIdx);
 }
 
+function getColSnapPositions(): number[] {
+  const ths = Array.from(document.querySelectorAll<HTMLElement>('#header-row th'));
+  const nonSticky = ths.filter(th => !th.classList.contains('row-num-cell') && !th.classList.contains('col-first'));
+  if (nonSticky.length === 0) return [0];
+  const stickyWidth = nonSticky[0].offsetLeft;
+  return nonSticky.map(th => th.offsetLeft - stickyWidth);
+}
+
+document.addEventListener('keydown', (e: KeyboardEvent) => {
+  const tag = (document.activeElement as HTMLElement)?.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  e.preventDefault();
+
+  const container = document.getElementById('table-container')!;
+  const modifier = e.metaKey || e.ctrlKey;
+
+  if (e.key === 'ArrowDown') {
+    if (modifier) {
+      container.scrollTop = container.scrollHeight;
+    } else {
+      const rh = getRowHeight();
+      container.scrollTop = (Math.floor(container.scrollTop / rh) + 5) * rh;
+    }
+  } else if (e.key === 'ArrowUp') {
+    if (modifier) {
+      container.scrollTop = 0;
+    } else {
+      const rh = getRowHeight();
+      container.scrollTop = Math.max(0, (Math.ceil(container.scrollTop / rh) - 5) * rh);
+    }
+  } else if (e.key === 'ArrowRight') {
+    if (modifier) {
+      container.scrollLeft = container.scrollWidth;
+    } else {
+      const positions = getColSnapPositions();
+      const sl = container.scrollLeft;
+      const next = positions.find(p => p > sl + 1);
+      container.scrollLeft = next !== undefined ? next : container.scrollWidth;
+    }
+  } else if (e.key === 'ArrowLeft') {
+    if (modifier) {
+      container.scrollLeft = 0;
+    } else {
+      const positions = getColSnapPositions();
+      const sl = container.scrollLeft;
+      const prev = [...positions].reverse().find(p => p < sl - 1);
+      container.scrollLeft = prev ?? 0;
+    }
+  }
+});
 
 document.addEventListener('DOMContentLoaded', () => {
   initContextMenu(handleShowGraph);

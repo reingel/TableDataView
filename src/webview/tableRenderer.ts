@@ -13,6 +13,10 @@ export function getData(): ParsedFile | null {
   return currentData;
 }
 
+export function getRowHeight(): number {
+  return ROW_HEIGHT;
+}
+
 export function setCrosshairRow(rowIdx: number | null, colIdxs: number[]): void {
   crosshairRowIdx = rowIdx;
   crosshairColIdxs = colIdxs;

@@ -146,8 +146,8 @@ function redraw(): void {
         tooltip: { enabled: false },
       },
       scales: {
-        x: { title: { display: true, text: xLabel } },
-        y: { title: { display: true, text: 'Value' } },
+        x: { title: { display: true, text: xLabel }, grid: { color: 'rgba(128,128,128,0.3)' } },
+        y: { title: { display: true, text: 'Value' }, grid: { color: 'rgba(128,128,128,0.3)' } },
       },
     },
     plugins: [crosshairPlugin],
