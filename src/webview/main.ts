@@ -2,7 +2,7 @@ import { ExtensionToWebviewMessage, ParsedFile } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, closeGraph, setLineWidth, setRowHighlightCallback, updateViewport } from './graphRenderer';
+import { renderGraph, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -206,6 +206,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 document.getElementById('sel-line-width')!.addEventListener('change', e => {
     setLineWidth(parseFloat((e.target as HTMLSelectElement).value));
+  });
+  document.getElementById('sel-marker')!.addEventListener('change', e => {
+    setMarkerStyle((e.target as HTMLSelectElement).value);
   });
 
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
