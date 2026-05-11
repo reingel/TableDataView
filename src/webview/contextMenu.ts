@@ -5,12 +5,14 @@ let onResetXAxis: (() => void) | null = null;
 let onSetXAxis: ((col: number) => void) | null = null;
 let onShowDiff: ((col: number) => void) | null = null;
 let onShowOriginal: ((col: number) => void) | null = null;
+let onShowMovAvg: ((col: number, windowSize: number) => void) | null = null;
 
 export interface ContextMenuCallbacks {
   resetXAxis: () => void;
   setXAxis: (col: number) => void;
   showDiff: (col: number) => void;
   showOriginal: (col: number) => void;
+  showMovAvg: (col: number, windowSize: number) => void;
 }
 
 export function init(callbacks: ContextMenuCallbacks): void {
@@ -18,6 +20,7 @@ export function init(callbacks: ContextMenuCallbacks): void {
   onSetXAxis = callbacks.setXAxis;
   onShowDiff = callbacks.showDiff;
   onShowOriginal = callbacks.showOriginal;
+  onShowMovAvg = callbacks.showMovAvg;
 
   menuEl = document.getElementById('context-menu')!;
 
@@ -25,6 +28,9 @@ export function init(callbacks: ContextMenuCallbacks): void {
   document.getElementById('ctx-set-xaxis')!.addEventListener('click', () => { hide(); onSetXAxis?.(rightClickedCol); });
   document.getElementById('ctx-show-diff')!.addEventListener('click', () => { hide(); onShowDiff?.(rightClickedCol); });
   document.getElementById('ctx-show-original')!.addEventListener('click', () => { hide(); onShowOriginal?.(rightClickedCol); });
+  document.getElementById('ctx-show-movavg-10')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 10); });
+  document.getElementById('ctx-show-movavg-30')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 30); });
+  document.getElementById('ctx-show-movavg-100')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 100); });
 
   document.addEventListener('click', () => hide());
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
@@ -33,14 +39,19 @@ export function init(callbacks: ContextMenuCallbacks): void {
 export function show(x: number, y: number, colIndex: number, opts: {
   isXAxis: boolean;
   isDiff: boolean;
+  movAvgWindowSize: number | undefined;
   xAxisIsDefault: boolean;
 }): void {
   rightClickedCol = colIndex;
 
+  const isTransformed = opts.isDiff || opts.movAvgWindowSize !== undefined;
   setItemVisible('ctx-reset-xaxis', opts.isXAxis && !opts.xAxisIsDefault);
   setItemVisible('ctx-set-xaxis', colIndex >= 0 && !opts.isXAxis);
-  setItemVisible('ctx-show-diff', colIndex >= 0 && !opts.isDiff);
-  setItemVisible('ctx-show-original', colIndex >= 0 && opts.isDiff);
+  setItemVisible('ctx-show-diff', colIndex >= 0 && !isTransformed);
+  setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 10);
+  setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 30);
+  setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 100);
+  setItemVisible('ctx-show-original', colIndex >= 0 && isTransformed);
 
   menuEl.style.left = `${x}px`;
   menuEl.style.top = `${y}px`;

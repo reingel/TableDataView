@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, closeGraph, setLineWidth, setRowHighlightCallback, updateViewport } from './graphRenderer';
@@ -14,7 +14,7 @@ let currentData: ParsedFile | null = null;
 function updateToolbar(): void {
   const selected = getSelected();
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
-  const hasCustomState = getXAxisCol() !== 0 || hasDiff();
+  const hasCustomState = getXAxisCol() !== 0 || hasDiff() || hasMovAvg();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
@@ -27,11 +27,23 @@ function getEffectiveRows(): string[][] {
   if (currentData.rows.length === 0) return [];
   return currentData.rows.map((row, i) =>
     row.map((val, j) => {
-      if (!isDiff(j)) return val;
-      if (i === 0) return '0';
-      const curr = parseFloat(val);
-      const prev = parseFloat(currentData!.rows[i - 1][j]);
-      return (!isNaN(curr) && !isNaN(prev)) ? String(curr - prev) : val;
+      if (isDiff(j)) {
+        if (i === 0) return '0';
+        const curr = parseFloat(val);
+        const prev = parseFloat(currentData!.rows[i - 1][j]);
+        return (!isNaN(curr) && !isNaN(prev)) ? String(curr - prev) : val;
+      }
+      const ws = getMovAvgWindowSize(j);
+      if (ws !== undefined) {
+        const start = Math.max(0, i - ws + 1);
+        let sum = 0, count = 0;
+        for (let k = start; k <= i; k++) {
+          const v = parseFloat(currentData!.rows[k][j]);
+          if (!isNaN(v)) { sum += v; count++; }
+        }
+        return count > 0 ? String(sum / count) : val;
+      }
+      return val;
     })
   );
 }
@@ -144,7 +156,8 @@ document.addEventListener('DOMContentLoaded', () => {
     resetXAxis: () => { resetXAxis(); updateToolbar(); },
     setXAxis: (col) => { setXAxisCol(col); updateToolbar(); },
     showDiff: (col) => { setDiff(col); updateToolbar(); },
-    showOriginal: (col) => { clearDiff(col); updateToolbar(); },
+    showOriginal: (col) => { clearDiff(col); clearMovAvg(col); updateToolbar(); },
+    showMovAvg: (col, windowSize) => { setMovAvg(col, windowSize); updateToolbar(); },
   });
 
   setRowHighlightCallback(highlightTableRow);
@@ -184,6 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-reset-all')!.addEventListener('click', () => {
     resetXAxis();
     clearAllDiff();
+    clearAllMovAvg();
     updateToolbar();
   });
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
@@ -204,6 +218,7 @@ document.getElementById('sel-line-width')!.addEventListener('change', e => {
     showContextMenu(e.clientX, e.clientY, colIndex, {
       isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
       isDiff: colIndex >= 0 && isDiff(colIndex),
+      movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,
       xAxisIsDefault: getXAxisCol() === 0,
     });
   });
