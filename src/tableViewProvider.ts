@@ -354,6 +354,14 @@ export class TableViewProvider {
           <option value="3">3.0</option>
         </select>
       </label>
+      <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
+        Marker
+        <select id="sel-marker" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
+          <option value="none">none</option>
+          <option value="dot" selected>.</option>
+          <option value="circle">o</option>
+        </select>
+      </label>
       <button id="btn-close-graph">&#x2715; Close</button>
     </div>
     <div id="graph-yvalues" class="hidden"></div>
