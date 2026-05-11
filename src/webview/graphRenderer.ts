@@ -1,6 +1,7 @@
 import Chart from 'chart.js/auto';
 
 const MAX_CHART_POINTS = 2000;
+const DRAG_THRESHOLD = 5;
 
 let chartInstance: any = null;
 let lineWidth: number = 1;
@@ -15,6 +16,13 @@ let canvasListenerAdded = false;
 let lastXAxisCol: number = 0;
 let viewportStartRow: number = 0;
 let viewportEndRow: number = 0;
+let zoomXMin: number | null = null;
+let zoomXMax: number | null = null;
+let isMouseDown = false;
+let isDragging = false;
+let mouseDownClientX = 0;
+let dragStartPixel = 0;
+let dragCurrentPixel = 0;
 
 export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
@@ -81,6 +89,24 @@ const crosshairPlugin = {
   },
 };
 
+const dragSelectPlugin = {
+  id: 'dragSelect',
+  afterDraw(chart: any) {
+    if (!isDragging) return;
+    const { chartArea, ctx } = chart;
+    const x1 = Math.max(chartArea.left, Math.min(dragStartPixel, dragCurrentPixel));
+    const x2 = Math.min(chartArea.right, Math.max(dragStartPixel, dragCurrentPixel));
+    if (x2 <= x1) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(100,150,255,0.2)';
+    ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+    ctx.strokeStyle = 'rgba(100,150,255,0.8)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+    ctx.restore();
+  },
+};
+
 function getDataCols(): number[] {
   const useColAsX = lastCols.includes(lastXAxisCol) && lastCols.length > 1;
   return useColAsX ? lastCols.filter(c => c !== lastXAxisCol) : lastCols;
@@ -103,7 +129,61 @@ function updateYValues(): void {
   overlay.classList.remove('hidden');
 }
 
-function handleCanvasClick(e: MouseEvent): void {
+function getCanvasPixelX(e: MouseEvent): number {
+  const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
+  return e.clientX - canvas.getBoundingClientRect().left;
+}
+
+function handleMouseDown(e: MouseEvent): void {
+  if (e.button !== 0) return;
+  isMouseDown = true;
+  isDragging = false;
+  mouseDownClientX = e.clientX;
+  dragStartPixel = getCanvasPixelX(e);
+  dragCurrentPixel = dragStartPixel;
+  e.preventDefault();
+}
+
+function handleMouseMove(e: MouseEvent): void {
+  if (!isMouseDown) return;
+  if (Math.abs(e.clientX - mouseDownClientX) > DRAG_THRESHOLD) {
+    isDragging = true;
+    dragCurrentPixel = getCanvasPixelX(e);
+    if (chartInstance) chartInstance.update('none');
+  }
+}
+
+function handleMouseUp(e: MouseEvent): void {
+  if (!isMouseDown || e.button !== 0) return;
+  isMouseDown = false;
+  if (isDragging) {
+    isDragging = false;
+    applyZoom();
+  } else {
+    handleCrosshairClick(e);
+  }
+}
+
+function handleDblClick(): void {
+  zoomXMin = null;
+  zoomXMax = null;
+  redraw();
+}
+
+function applyZoom(): void {
+  if (!chartInstance) return;
+  const scale = chartInstance.scales.x;
+  const x1 = scale.getValueForPixel(dragStartPixel);
+  const x2 = scale.getValueForPixel(dragCurrentPixel);
+  const newMin = Math.min(x1, x2);
+  const newMax = Math.max(x1, x2);
+  if (newMax - newMin < 1e-10) return;
+  zoomXMin = newMin;
+  zoomXMax = newMax;
+  redraw();
+}
+
+function handleCrosshairClick(e: MouseEvent): void {
   if (!chartInstance) return;
   const elements = chartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
   if (!elements.length) return;
@@ -118,7 +198,11 @@ function handleCanvasClick(e: MouseEvent): void {
 function initCanvasListener(): void {
   if (canvasListenerAdded) return;
   canvasListenerAdded = true;
-  document.getElementById('chart-canvas')!.addEventListener('click', handleCanvasClick);
+  const canvas = document.getElementById('chart-canvas')!;
+  canvas.addEventListener('mousedown', handleMouseDown);
+  canvas.addEventListener('mousemove', handleMouseMove);
+  canvas.addEventListener('mouseup', handleMouseUp);
+  canvas.addEventListener('dblclick', handleDblClick);
 }
 
 export function renderGraph(headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0): void {
@@ -127,6 +211,8 @@ export function renderGraph(headers: string[], rows: string[][], selectedCols: n
   lastCols = selectedCols;
   lastXAxisCol = xAxisCol;
   crosshairIndex = null;
+  zoomXMin = null;
+  zoomXMax = null;
 
   const dec = decimateRows(rows);
   displayRows = dec.display;
@@ -135,6 +221,23 @@ export function renderGraph(headers: string[], rows: string[][], selectedCols: n
   document.getElementById('graph-container')!.classList.remove('hidden');
   redraw();
   initCanvasListener();
+}
+
+function computeYRange(datasets: any[]): { min: number; max: number } | null {
+  if (zoomXMin === null || zoomXMax === null) return null;
+  let min = Infinity, max = -Infinity;
+  for (const ds of datasets) {
+    for (const pt of ds.data) {
+      if (pt === null) continue;
+      if (pt.x >= zoomXMin! && pt.x <= zoomXMax!) {
+        if (pt.y < min) min = pt.y;
+        if (pt.y > max) max = pt.y;
+      }
+    }
+  }
+  if (min === Infinity) return null;
+  const pad = (max - min) * 0.05 || 1;
+  return { min: min - pad, max: max + pad };
 }
 
 function redraw(): void {
@@ -157,6 +260,8 @@ function redraw(): void {
     showLine: true,
   }));
 
+  const yRange = computeYRange(datasets);
+
   if (chartInstance) {
     chartInstance.destroy();
     chartInstance = null;
@@ -175,11 +280,20 @@ function redraw(): void {
         tooltip: { enabled: false },
       },
       scales: {
-        x: { type: 'linear', title: { display: true, text: xLabel }, grid: { color: 'rgba(128,128,128,0.3)' } },
-        y: { title: { display: true, text: 'Value' }, grid: { color: 'rgba(128,128,128,0.3)' } },
+        x: {
+          type: 'linear',
+          title: { display: true, text: xLabel },
+          grid: { color: 'rgba(128,128,128,0.3)' },
+          ...(zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : {}),
+        },
+        y: {
+          title: { display: true, text: 'Value' },
+          grid: { color: 'rgba(128,128,128,0.3)' },
+          ...(yRange ? { min: yRange.min, max: yRange.max } : {}),
+        },
       },
     },
-    plugins: [viewportPlugin, crosshairPlugin],
+    plugins: [viewportPlugin, crosshairPlugin, dragSelectPlugin],
   });
 
   if (crosshairIndex !== null) updateYValues();
@@ -195,7 +309,6 @@ export function setLineWidth(width: number): void {
   lineWidth = width;
   if (lastCols.length > 0) redraw();
 }
-
 
 export function closeGraph(): void {
   crosshairIndex = null;
