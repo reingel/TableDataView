@@ -9,6 +9,7 @@ let crosshairRowIdx: number | null = null;
 let crosshairColIdxs: number[] = [];
 let renderPending = false;
 const diffCols = new Set<number>();
+const movAvgCols = new Map<number, number>(); // col -> window size
 
 export function getData(): ParsedFile | null {
   return currentData;
@@ -24,6 +25,39 @@ export function isDiff(col: number): boolean {
 
 export function hasDiff(): boolean {
   return diffCols.size > 0;
+}
+
+export function isMovAvg(col: number): boolean {
+  return movAvgCols.has(col);
+}
+
+export function hasMovAvg(): boolean {
+  return movAvgCols.size > 0;
+}
+
+export function getMovAvgWindowSize(col: number): number | undefined {
+  return movAvgCols.get(col);
+}
+
+export function setMovAvg(col: number, windowSize: number): void {
+  diffCols.delete(col);
+  applyDiffHeader(col);
+  movAvgCols.set(col, windowSize);
+  applyMovAvgHeader(col);
+  scheduleRender();
+}
+
+export function clearMovAvg(col: number): void {
+  movAvgCols.delete(col);
+  applyMovAvgHeader(col);
+  scheduleRender();
+}
+
+export function clearAllMovAvg(): void {
+  const cols = Array.from(movAvgCols.keys());
+  movAvgCols.clear();
+  cols.forEach(col => applyMovAvgHeader(col));
+  scheduleRender();
 }
 
 export function setDiff(col: number): void {
@@ -49,6 +83,13 @@ function applyDiffHeader(col: number): void {
   const isDiffCol = diffCols.has(col);
   document.querySelectorAll<HTMLElement>(`#col-index-row [data-col-index="${col}"], #header-row [data-col-index="${col}"]`).forEach(el => {
     el.classList.toggle('diff-col', isDiffCol);
+  });
+}
+
+function applyMovAvgHeader(col: number): void {
+  const isMovAvgCol = movAvgCols.has(col);
+  document.querySelectorAll<HTMLElement>(`#col-index-row [data-col-index="${col}"], #header-row [data-col-index="${col}"]`).forEach(el => {
+    el.classList.toggle('movavg-col', isMovAvgCol);
   });
 }
 
@@ -96,6 +137,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   crosshairRowIdx = null;
   crosshairColIdxs = [];
   diffCols.clear();
+  movAvgCols.clear();
 
   initSelector(data.headers.length, onSelectionChange);
 
@@ -179,6 +221,17 @@ function getDiffValue(rowIdx: number, colIdx: number): string {
   return String(curr - prev);
 }
 
+function getMovAvgValue(rowIdx: number, colIdx: number, windowSize: number): string {
+  if (!currentData) return '';
+  const start = Math.max(0, rowIdx - windowSize + 1);
+  let sum = 0, count = 0;
+  for (let i = start; i <= rowIdx; i++) {
+    const val = parseFloat(currentData.rows[i][colIdx]);
+    if (!isNaN(val)) { sum += val; count++; }
+  }
+  return count > 0 ? String(sum / count) : currentData.rows[rowIdx][colIdx];
+}
+
 function renderBody(): void {
   if (!currentData) return;
   const container = document.getElementById('table-container')!;
@@ -216,11 +269,21 @@ function renderBody(): void {
     for (let j = 0; j < row.length; j++) {
       const td = document.createElement('td');
       const inDiff = diffCols.has(j);
-      td.textContent = inDiff ? getDiffValue(i, j) : row[j];
+      const movAvgWin = movAvgCols.get(j);
+      let displayVal: string;
+      let extraCls = '';
+      if (inDiff) {
+        displayVal = getDiffValue(i, j);
+        extraCls = ' diff-col';
+      } else if (movAvgWin !== undefined) {
+        displayVal = getMovAvgValue(i, j, movAvgWin);
+        extraCls = ' movavg-col';
+      } else {
+        displayVal = row[j];
+      }
+      td.textContent = displayVal;
       td.dataset.colIndex = String(j);
-      let cls = j === 0 ? 'align-left col-first' : 'align-left';
-      if (inDiff) cls += ' diff-col';
-      td.className = cls;
+      td.className = (j === 0 ? 'align-left col-first' : 'align-left') + extraCls;
       td.addEventListener('click', e => handleColumnClick(j, e as MouseEvent));
       tr.appendChild(td);
     }

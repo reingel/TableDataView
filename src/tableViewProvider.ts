@@ -265,6 +265,8 @@ export class TableViewProvider {
     }
     th.diff-col { color: #7ec8a0; }
     td.diff-col { color: #7ec8a0; }
+    th.movavg-col { color: #7ec8e8; }
+    td.movavg-col { color: #7ec8e8; }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;
@@ -331,6 +333,9 @@ export class TableViewProvider {
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
       <li id="ctx-show-diff">Show numerical differences</li>
+      <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
+      <li id="ctx-show-movavg-30">Show moving averages (n=30)</li>
+      <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
       <li id="ctx-show-original">Show original values</li>
     </ul>
   </div>
