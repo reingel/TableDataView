@@ -367,7 +367,42 @@ function redraw(): void {
 export function updateViewport(startRow: number, endRow: number): void {
   viewportStartRow = startRow;
   viewportEndRow = endRow;
-  if (chartInstance) chartInstance.update('none');
+  if (!chartInstance) return;
+
+  if (zoomXMin !== null && zoomXMax !== null) {
+    const scale = chartInstance.scales.x;
+    const totalRows = lastRows.length;
+    const dispLen = displayRows.length;
+    const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
+    const useColAsX = lastCols.includes(lastXAxisCol);
+    const toXData = (i: number) => useColAsX
+      ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
+      : (rowIndexMap[i]);
+
+    const si = Math.max(0, toIdx(startRow));
+    const ei = Math.min(dispLen - 1, toIdx(endRow));
+    const boxMin = toXData(si);
+    const boxMax = toXData(ei);
+    const zoomSpan = zoomXMax - zoomXMin;
+    let panned = false;
+    if (boxMax - boxMin > zoomSpan) {
+      const boxCenter = (boxMin + boxMax) / 2;
+      zoomXMin = boxCenter - zoomSpan / 2;
+      zoomXMax = boxCenter + zoomSpan / 2;
+      panned = true;
+    } else if (boxMin < zoomXMin) {
+      zoomXMax = zoomXMax - (zoomXMin - boxMin);
+      zoomXMin = boxMin;
+      panned = true;
+    } else if (boxMax > zoomXMax) {
+      zoomXMin = zoomXMin + (boxMax - zoomXMax);
+      zoomXMax = boxMax;
+      panned = true;
+    }
+    if (panned) { redraw(); return; }
+  }
+
+  chartInstance.update('none');
 }
 
 export function setLineWidth(width: number): void {
