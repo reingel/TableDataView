@@ -211,17 +211,18 @@ function scheduleRender(): void {
   }
 }
 
-function getDiffValue(rowIdx: number, colIdx: number): string {
+export function getDiffValue(rowIdx: number, colIdx: number): string {
   if (!currentData) return '';
-  const row = currentData.rows[rowIdx];
-  if (rowIdx === 0) return '0';
-  const curr = parseFloat(row[colIdx]);
-  const prev = parseFloat(currentData.rows[rowIdx - 1][colIdx]);
-  if (isNaN(curr) || isNaN(prev)) return row[colIdx];
+  const n = currentData.rows.length;
+  if (n < 2) return currentData.rows[rowIdx][colIdx];
+  const i = rowIdx < n - 1 ? rowIdx : n - 2;
+  const curr = parseFloat(currentData.rows[i + 1][colIdx]);
+  const prev = parseFloat(currentData.rows[i][colIdx]);
+  if (isNaN(curr) || isNaN(prev)) return currentData.rows[rowIdx][colIdx];
   return String(curr - prev);
 }
 
-function getMovAvgValue(rowIdx: number, colIdx: number, windowSize: number): string {
+export function getMovAvgValue(rowIdx: number, colIdx: number, windowSize: number): string {
   if (!currentData) return '';
   const start = Math.max(0, rowIdx - windowSize + 1);
   let sum = 0, count = 0;

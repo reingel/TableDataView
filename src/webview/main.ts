@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
@@ -27,22 +27,9 @@ function getEffectiveRows(): string[][] {
   if (currentData.rows.length === 0) return [];
   return currentData.rows.map((row, i) =>
     row.map((val, j) => {
-      if (isDiff(j)) {
-        if (i === 0) return '0';
-        const curr = parseFloat(val);
-        const prev = parseFloat(currentData!.rows[i - 1][j]);
-        return (!isNaN(curr) && !isNaN(prev)) ? String(curr - prev) : val;
-      }
+      if (isDiff(j)) return getDiffValue(i, j);
       const ws = getMovAvgWindowSize(j);
-      if (ws !== undefined) {
-        const start = Math.max(0, i - ws + 1);
-        let sum = 0, count = 0;
-        for (let k = start; k <= i; k++) {
-          const v = parseFloat(currentData!.rows[k][j]);
-          if (!isNaN(v)) { sum += v; count++; }
-        }
-        return count > 0 ? String(sum / count) : val;
-      }
+      if (ws !== undefined) return getMovAvgValue(i, j, ws);
       return val;
     })
   );
