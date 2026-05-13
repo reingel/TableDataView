@@ -31,6 +31,7 @@ export function init(callbacks: ContextMenuCallbacks): void {
   document.getElementById('ctx-show-movavg-10')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 10); });
   document.getElementById('ctx-show-movavg-30')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 30); });
   document.getElementById('ctx-show-movavg-100')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 100); });
+  document.getElementById('ctx-show-movavg-1000')!.addEventListener('click', () => { hide(); onShowMovAvg?.(rightClickedCol, 1000); });
 
   document.addEventListener('click', () => hide());
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
@@ -51,6 +52,7 @@ export function show(x: number, y: number, colIndex: number, opts: {
   setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 10);
   setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 30);
   setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 100);
+  setItemVisible('ctx-show-movavg-1000', colIndex >= 0 && !opts.isDiff && opts.movAvgWindowSize !== 1000);
   setItemVisible('ctx-show-original', colIndex >= 0 && isTransformed);
 
   menuEl.style.left = `${x}px`;

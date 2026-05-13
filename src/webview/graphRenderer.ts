@@ -6,7 +6,7 @@ const MARKER_RADIUS: Record<string, number> = { none: 0, dot: 2, circle: 5 };
 
 let chartInstance: any = null;
 let lineWidth: number = 1;
-let markerStyle: string = 'dot';
+let markerStyle: string = 'none';
 let crosshairDataX: number | null = null;
 let crosshairOrigRowIdx: number | null = null;
 let lastHeaders: string[] = [];
@@ -36,7 +36,7 @@ export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
 type DataPoint = { x: number; y: number; rowIdx: number };
 
 function buildDatasets(): any[] {
-  const useColAsX = lastCols.includes(lastXAxisCol) && lastCols.length > 1;
+  const useColAsX = lastCols.includes(lastXAxisCol);
   const dataCols = getDataCols();
   const result: any[] = [];
 
@@ -46,7 +46,7 @@ function buildDatasets(): any[] {
     let cur: DataPoint[] = [];
 
     displayRows.forEach((row, i) => {
-      const xVal = useColAsX ? parseFloat(row[lastXAxisCol]) : rowIndexMap[i] + 1;
+      const xVal = useColAsX ? parseFloat(row[lastXAxisCol]) : rowIndexMap[i];
       const yVal = parseFloat(row[colIdx]);
       if (isFinite(xVal) && isFinite(yVal)) {
         cur.push({ x: xVal, y: yVal, rowIdx: rowIndexMap[i] });
@@ -81,7 +81,7 @@ const viewportPlugin = {
   afterDraw(chart: any) {
     if (displayRows.length === 0 || !chart.scales.x) return;
     const xScale = chart.scales.x;
-    const useColAsX = lastCols.includes(lastXAxisCol) && lastCols.length > 1;
+    const useColAsX = lastCols.includes(lastXAxisCol);
     const totalRows = lastRows.length;
     const dispLen = displayRows.length;
     const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
@@ -89,7 +89,7 @@ const viewportPlugin = {
     const ei = Math.min(dispLen - 1, toIdx(viewportEndRow));
     const toXData = (i: number) => useColAsX
       ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
-      : (rowIndexMap[i] + 1);
+      : (rowIndexMap[i]);
     const startX = xScale.getPixelForValue(toXData(si));
     const endX = xScale.getPixelForValue(toXData(ei));
     if (endX <= startX) return;
@@ -143,15 +143,16 @@ const dragSelectPlugin = {
 };
 
 function getDataCols(): number[] {
-  const useColAsX = lastCols.includes(lastXAxisCol) && lastCols.length > 1;
-  return useColAsX ? lastCols.filter(c => c !== lastXAxisCol) : lastCols;
+  if (!lastCols.includes(lastXAxisCol)) return lastCols;
+  const filtered = lastCols.filter(c => c !== lastXAxisCol);
+  return filtered.length > 0 ? filtered : [lastXAxisCol];
 }
 
 function updateYValues(): void {
   const overlay = document.getElementById('graph-yvalues')!;
   if (crosshairOrigRowIdx === null) { overlay.classList.add('hidden'); return; }
   const row = lastRows[crosshairOrigRowIdx];
-  const useColAsX = lastCols.includes(lastXAxisCol) && lastCols.length > 1;
+  const useColAsX = lastCols.includes(lastXAxisCol);
   const xLabel = useColAsX
     ? `${lastHeaders[lastXAxisCol]}=${row[lastXAxisCol]}`
     : `Row ${crosshairOrigRowIdx + 1}`;
@@ -276,15 +277,23 @@ function initCanvasListener(): void {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
 
+export function resetZoom(): void {
+  zoomXMin = null;
+  zoomXMax = null;
+}
+
 export function renderGraph(headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0): void {
+  if (xAxisCol !== lastXAxisCol) {
+    zoomXMin = null;
+    zoomXMax = null;
+  }
+
   lastHeaders = headers;
   lastRows = rows;
   lastCols = selectedCols;
   lastXAxisCol = xAxisCol;
   crosshairDataX = null;
   crosshairOrigRowIdx = null;
-  zoomXMin = null;
-  zoomXMax = null;
 
   displayRows = rows;
   rowIndexMap = rows.map((_, i) => i);
@@ -307,11 +316,12 @@ function computeYRange(datasets: any[]): { min: number; max: number } | null {
   }
   if (min === Infinity) return null;
   const pad = (max - min) * 0.05 || 1;
-  return { min: min - pad, max: max + pad };
+  const yMin = (min >= 0 && min - pad < 0) ? 0 : min - pad;
+  return { min: yMin, max: max + pad };
 }
 
 function redraw(): void {
-  const useColAsX = lastCols.includes(lastXAxisCol) && lastCols.length > 1;
+  const useColAsX = lastCols.includes(lastXAxisCol);
   const xLabel = useColAsX ? lastHeaders[lastXAxisCol] : 'Row';
   const dataCols = getDataCols();
   const datasets = buildDatasets();
@@ -344,7 +354,7 @@ function redraw(): void {
         y: {
           title: { display: true, text: 'Value' },
           grid: { color: 'rgba(128,128,128,0.3)' },
-          ...(yRange ? { min: yRange.min, max: yRange.max } : {}),
+          ...(yRange ? { min: yRange.min, max: yRange.max } : { suggestedMin: 0 }),
         },
       },
     },
@@ -357,7 +367,42 @@ function redraw(): void {
 export function updateViewport(startRow: number, endRow: number): void {
   viewportStartRow = startRow;
   viewportEndRow = endRow;
-  if (chartInstance) chartInstance.update('none');
+  if (!chartInstance) return;
+
+  if (zoomXMin !== null && zoomXMax !== null) {
+    const scale = chartInstance.scales.x;
+    const totalRows = lastRows.length;
+    const dispLen = displayRows.length;
+    const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
+    const useColAsX = lastCols.includes(lastXAxisCol);
+    const toXData = (i: number) => useColAsX
+      ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
+      : (rowIndexMap[i]);
+
+    const si = Math.max(0, toIdx(startRow));
+    const ei = Math.min(dispLen - 1, toIdx(endRow));
+    const boxMin = toXData(si);
+    const boxMax = toXData(ei);
+    const zoomSpan = zoomXMax - zoomXMin;
+    let panned = false;
+    if (boxMax - boxMin > zoomSpan) {
+      const boxCenter = (boxMin + boxMax) / 2;
+      zoomXMin = boxCenter - zoomSpan / 2;
+      zoomXMax = boxCenter + zoomSpan / 2;
+      panned = true;
+    } else if (boxMin < zoomXMin) {
+      zoomXMax = zoomXMax - (zoomXMin - boxMin);
+      zoomXMin = boxMin;
+      panned = true;
+    } else if (boxMax > zoomXMax) {
+      zoomXMin = zoomXMin + (boxMax - zoomXMax);
+      zoomXMax = boxMax;
+      panned = true;
+    }
+    if (panned) { redraw(); return; }
+  }
+
+  chartInstance.update('none');
 }
 
 export function setLineWidth(width: number): void {

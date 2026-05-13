@@ -336,6 +336,7 @@ export class TableViewProvider {
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
       <li id="ctx-show-movavg-30">Show moving averages (n=30)</li>
       <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
+      <li id="ctx-show-movavg-1000">Show moving averages (n=1000)</li>
       <li id="ctx-show-original">Show original values</li>
     </ul>
   </div>
@@ -357,8 +358,8 @@ export class TableViewProvider {
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Marker
         <select id="sel-marker" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
-          <option value="none">none</option>
-          <option value="dot" selected>.</option>
+          <option value="none" selected>none</option>
+          <option value="dot">.</option>
           <option value="circle">o</option>
         </select>
       </label>
