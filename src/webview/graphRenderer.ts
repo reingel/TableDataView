@@ -6,7 +6,7 @@ const MARKER_RADIUS: Record<string, number> = { none: 0, dot: 2, circle: 5 };
 
 let chartInstance: any = null;
 let lineWidth: number = 1;
-let markerStyle: string = 'dot';
+let markerStyle: string = 'none';
 let crosshairDataX: number | null = null;
 let crosshairOrigRowIdx: number | null = null;
 let lastHeaders: string[] = [];
