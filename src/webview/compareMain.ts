@@ -1,0 +1,880 @@
+import { ExtensionToWebviewMessage, ParsedFile } from '../types';
+import { renderGraph, resetZoom, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
+
+declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
+const vscode = acquireVsCodeApi();
+
+type Side = 'left' | 'right';
+
+const BUFFER = 40;
+let ROW_HEIGHT = 24;
+
+let leftData: ParsedFile | null = null;
+let rightData: ParsedFile | null = null;
+let displayRowCount = 0;
+
+// leftColIdx → rightColIdx
+let columnMapping = new Map<number, number>();
+// rightColIdx → leftColIdx
+let reverseMapping = new Map<number, number>();
+
+// Transform state per side
+const diffCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
+const movAvgCols: Record<Side, Map<number, number>> = { left: new Map(), right: new Map() };
+const xAxisCol: Record<Side, number> = { left: 0, right: 0 };
+const selectedCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
+
+// Columns that have at least one differing cell (by side)
+const diffColumnSet: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
+
+function computeDiffColumns(): void {
+  diffColumnSet.left.clear();
+  diffColumnSet.right.clear();
+  if (!leftData || !rightData) return;
+  for (const [li, ri] of columnMapping) {
+    for (let i = 0; i < displayRowCount; i++) {
+      if (getCellValue('left', i, li) !== getCellValue('right', i, ri)) {
+        diffColumnSet.left.add(li);
+        diffColumnSet.right.add(ri);
+        break;
+      }
+    }
+  }
+}
+
+// Crosshair state
+let crosshairRowIdx: number | null = null;
+
+// Render scheduling
+let renderPending = false;
+
+// Scroll sync
+let syncScrollFlag = false;
+
+function otherSide(side: Side): Side {
+  return side === 'left' ? 'right' : 'left';
+}
+
+function getMappedCol(side: Side, colIdx: number): number | undefined {
+  return side === 'left' ? columnMapping.get(colIdx) : reverseMapping.get(colIdx);
+}
+
+function lcsLength(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp = new Array(n + 1).fill(0);
+  for (let i = 1; i <= m; i++) {
+    let prev = 0;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev + 1 : Math.max(dp[j], dp[j - 1]);
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+function greedyMatch(
+  leftHeaders: string[], rightHeaders: string[],
+  unmatchedL: Set<number>, unmatchedR: Set<number>,
+  score: (a: string, b: string) => number
+): void {
+  const pairs: { li: number; ri: number; s: number }[] = [];
+  for (const li of unmatchedL) {
+    for (const ri of unmatchedR) {
+      const s = score(leftHeaders[li], rightHeaders[ri]);
+      if (s > 0) pairs.push({ li, ri, s });
+    }
+  }
+  pairs.sort((a, b) => b.s - a.s);
+  for (const { li, ri } of pairs) {
+    if (unmatchedL.has(li) && unmatchedR.has(ri)) {
+      columnMapping.set(li, ri);
+      reverseMapping.set(ri, li);
+      unmatchedL.delete(li);
+      unmatchedR.delete(ri);
+    }
+  }
+}
+
+function buildColumnMapping(leftHeaders: string[], rightHeaders: string[]): void {
+  columnMapping.clear();
+  reverseMapping.clear();
+
+  const uL = new Set(leftHeaders.map((_, i) => i));
+  const uR = new Set(rightHeaders.map((_, i) => i));
+
+  // Tier 1: case-sensitive exact
+  for (const li of Array.from(uL)) {
+    for (const ri of Array.from(uR)) {
+      if (leftHeaders[li] === rightHeaders[ri]) {
+        columnMapping.set(li, ri); reverseMapping.set(ri, li);
+        uL.delete(li); uR.delete(ri);
+        break;
+      }
+    }
+  }
+
+  // Tier 2: case-sensitive most similar (LCS)
+  greedyMatch(leftHeaders, rightHeaders, uL, uR,
+    (a, b) => lcsLength(a, b));
+
+  // Tier 3: case-insensitive exact
+  for (const li of Array.from(uL)) {
+    for (const ri of Array.from(uR)) {
+      if (leftHeaders[li].toLowerCase() === rightHeaders[ri].toLowerCase()) {
+        columnMapping.set(li, ri); reverseMapping.set(ri, li);
+        uL.delete(li); uR.delete(ri);
+        break;
+      }
+    }
+  }
+
+  // Tier 4: case-insensitive most similar (LCS)
+  greedyMatch(leftHeaders, rightHeaders, uL, uR,
+    (a, b) => lcsLength(a.toLowerCase(), b.toLowerCase()));
+}
+
+// ---- Toolbar ----
+
+function updateToolbar(): void {
+  const hasLeft = selectedCols.left.size > 0;
+  const hasRight = selectedCols.right.size > 0;
+  (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = !hasLeft && !hasRight;
+
+  const hasCustomState =
+    xAxisCol.left !== 0 || xAxisCol.right !== 0 ||
+    diffCols.left.size > 0 || diffCols.right.size > 0 ||
+    movAvgCols.left.size > 0 || movAvgCols.right.size > 0;
+  document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
+
+  const graphContainer = document.getElementById('graph-container')!;
+  if (!graphContainer.classList.contains('hidden') && leftData && rightData) {
+    renderGraph(
+      leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
+      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right }
+    );
+  }
+}
+
+// ---- Value computation ----
+
+function getDiffValue(side: Side, rowIdx: number, colIdx: number): string {
+  const data = side === 'left' ? leftData : rightData;
+  if (!data) return '';
+  const n = data.rows.length;
+  if (n < 2) return data.rows[rowIdx][colIdx];
+  const i = rowIdx < n - 1 ? rowIdx : n - 2;
+  const curr = parseFloat(data.rows[i + 1][colIdx]);
+  const prev = parseFloat(data.rows[i][colIdx]);
+  if (isNaN(curr) || isNaN(prev)) return data.rows[rowIdx][colIdx];
+  return String(curr - prev);
+}
+
+function getMovAvgValue(side: Side, rowIdx: number, colIdx: number, windowSize: number): string {
+  const data = side === 'left' ? leftData : rightData;
+  if (!data) return '';
+  const start = Math.max(0, rowIdx - windowSize + 1);
+  let sum = 0, count = 0;
+  for (let i = start; i <= rowIdx; i++) {
+    const val = parseFloat(data.rows[i][colIdx]);
+    if (!isNaN(val)) { sum += val; count++; }
+  }
+  return count > 0 ? String(sum / count) : data.rows[rowIdx][colIdx];
+}
+
+function getCellValue(side: Side, rowIdx: number, colIdx: number): string {
+  const data = side === 'left' ? leftData : rightData;
+  if (!data) return '';
+  if (diffCols[side].has(colIdx)) return getDiffValue(side, rowIdx, colIdx);
+  const ws = movAvgCols[side].get(colIdx);
+  if (ws !== undefined) return getMovAvgValue(side, rowIdx, colIdx, ws);
+  return data.rows[rowIdx]?.[colIdx] ?? '';
+}
+
+function getEffectiveRows(side: Side): string[][] {
+  const data = side === 'left' ? leftData : rightData;
+  if (!data) return [];
+  return data.rows.slice(0, displayRowCount).map((row, i) =>
+    row.map((_, j) => getCellValue(side, i, j))
+  );
+}
+
+// ---- Virtual rendering ----
+
+function scheduleRender(): void {
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      computeDiffColumns();
+      renderBody('left');
+      renderBody('right');
+    });
+  }
+}
+
+function getPane(side: Side): HTMLElement {
+  return document.getElementById(side === 'left' ? 'left-pane' : 'right-pane')!;
+}
+
+function renderBody(side: Side): void {
+  const data = side === 'left' ? leftData : rightData;
+  if (!data) return;
+  const pane = getPane(side);
+  const scrollTop = pane.scrollTop;
+  const clientHeight = pane.clientHeight || 400;
+  const totalRows = displayRowCount;
+  const colCount = data.headers.length;
+
+  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
+  const end = Math.min(totalRows - 1, Math.ceil((scrollTop + clientHeight) / ROW_HEIGHT) + BUFFER);
+
+  const tbody = document.getElementById(`${side}-data-body`)!;
+  tbody.innerHTML = '';
+
+  if (start > 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = colCount + 1;
+    td.style.cssText = `height:${start * ROW_HEIGHT}px;padding:0;border:none;pointer-events:none;`;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
+  const frag = document.createDocumentFragment();
+  for (let i = start; i <= end; i++) {
+    const row = data.rows[i];
+    const tr = document.createElement('tr');
+    tr.dataset.rowIndex = String(i);
+
+    const tdNum = document.createElement('td');
+    tdNum.textContent = String(i + 1);
+    tdNum.className = 'row-num-cell align-right';
+    tr.appendChild(tdNum);
+
+    for (let j = 0; j < row.length; j++) {
+      const td = document.createElement('td');
+      const inDiff = diffCols[side].has(j);
+      const movAvgWin = movAvgCols[side].get(j);
+      let displayVal: string;
+      let extraCls = '';
+      if (inDiff) {
+        displayVal = getDiffValue(side, i, j);
+        extraCls = ' diff-col';
+      } else if (movAvgWin !== undefined) {
+        displayVal = getMovAvgValue(side, i, j, movAvgWin);
+        extraCls = ' movavg-col';
+      } else {
+        displayVal = row[j];
+      }
+      const otherCol = side === 'left' ? columnMapping.get(j) : reverseMapping.get(j);
+      if (otherCol !== undefined) {
+        if (diffColumnSet[side].has(j)) extraCls += ' col-has-diff';
+        const otherVal = getCellValue(otherSide(side), i, otherCol);
+        if (displayVal !== otherVal) extraCls += ' value-diff';
+      }
+      td.textContent = displayVal;
+      td.dataset.colIndex = String(j);
+      td.dataset.side = side;
+      td.className = (j === 0 ? 'align-left col-first' : 'align-left') + extraCls;
+      td.addEventListener('click', e => handleColumnClick(side, j, e as MouseEvent));
+      tr.appendChild(td);
+    }
+    frag.appendChild(tr);
+  }
+  tbody.appendChild(frag);
+
+  if (end < totalRows - 1) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = colCount + 1;
+    td.style.cssText = `height:${(totalRows - 1 - end) * ROW_HEIGHT}px;padding:0;border:none;pointer-events:none;`;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
+  applyHighlight(side);
+  applyRowHighlight(side);
+}
+
+// ---- Column selection ----
+
+let lastClickedCol: Record<Side, number | null> = { left: null, right: null };
+
+function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void {
+  const other = otherSide(side);
+  const mappedIdx = getMappedCol(side, colIdx);
+
+  if (event.shiftKey && lastClickedCol[side] !== null) {
+    const lo = Math.min(lastClickedCol[side]!, colIdx);
+    const hi = Math.max(lastClickedCol[side]!, colIdx);
+    for (let i = lo; i <= hi; i++) {
+      selectedCols[side].add(i);
+      const mi = getMappedCol(side, i);
+      if (mi !== undefined) selectedCols[other].add(mi);
+    }
+  } else if (event.ctrlKey || event.metaKey) {
+    if (selectedCols[side].has(colIdx)) {
+      selectedCols[side].delete(colIdx);
+      if (mappedIdx !== undefined) selectedCols[other].delete(mappedIdx);
+    } else {
+      selectedCols[side].add(colIdx);
+      if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
+    }
+  } else {
+    selectedCols.left.clear();
+    selectedCols.right.clear();
+    selectedCols[side].add(colIdx);
+    if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
+  }
+
+  // Always keep x-axis col selected
+  selectedCols.left.add(xAxisCol.left);
+  selectedCols.right.add(xAxisCol.right);
+
+  lastClickedCol[side] = colIdx;
+  applyHighlight('left');
+  applyHighlight('right');
+  updateToolbar();
+}
+
+function applyHighlight(side: Side): void {
+  const data = side === 'left' ? leftData : rightData;
+  if (!data) return;
+  for (let i = 0; i < data.headers.length; i++) {
+    const cells = document.querySelectorAll<HTMLElement>(`#${side}-table [data-col-index="${i}"]`);
+    const isXAxis = i === xAxisCol[side];
+    const isSelected = selectedCols[side].has(i) && !isXAxis;
+    cells.forEach(cell => {
+      cell.classList.toggle('selected', isSelected);
+      cell.classList.toggle('x-axis', isXAxis);
+    });
+  }
+}
+
+function applyDiffHeader(side: Side, colIdx: number): void {
+  const isDiffCol = diffCols[side].has(colIdx);
+  document.querySelectorAll<HTMLElement>(`#${side}-col-index-row [data-col-index="${colIdx}"], #${side}-header-row [data-col-index="${colIdx}"]`).forEach(el => {
+    el.classList.toggle('diff-col', isDiffCol);
+  });
+}
+
+function applyMovAvgHeader(side: Side, colIdx: number): void {
+  const isMovAvgCol = movAvgCols[side].has(colIdx);
+  document.querySelectorAll<HTMLElement>(`#${side}-col-index-row [data-col-index="${colIdx}"], #${side}-header-row [data-col-index="${colIdx}"]`).forEach(el => {
+    el.classList.toggle('movavg-col', isMovAvgCol);
+  });
+}
+
+function applyRowHighlight(side: Side): void {
+  const tableId = `#${side}-data-body`;
+  document.querySelectorAll(`${tableId} td.crosshair-row`).forEach(el => el.classList.remove('crosshair-row'));
+  if (crosshairRowIdx === null) return;
+  const tr = document.querySelector(`${tableId} tr[data-row-index="${crosshairRowIdx}"]`);
+  if (!tr) return;
+  selectedCols[side].forEach(colIdx => {
+    const td = tr.querySelector<HTMLElement>(`[data-col-index="${colIdx}"]`);
+    if (td) td.classList.add('crosshair-row');
+  });
+}
+
+// ---- Transform operations (synced between sides) ----
+
+function setDiff(side: Side, colIdx: number): void {
+  diffCols[side].add(colIdx);
+  movAvgCols[side].delete(colIdx);
+  applyDiffHeader(side, colIdx);
+  applyMovAvgHeader(side, colIdx);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, colIdx);
+  if (mi !== undefined) {
+    diffCols[other].add(mi);
+    movAvgCols[other].delete(mi);
+    applyDiffHeader(other, mi);
+    applyMovAvgHeader(other, mi);
+  }
+  scheduleRender();
+  updateToolbar();
+}
+
+function setMovAvg(side: Side, colIdx: number, windowSize: number): void {
+  diffCols[side].delete(colIdx);
+  movAvgCols[side].set(colIdx, windowSize);
+  applyDiffHeader(side, colIdx);
+  applyMovAvgHeader(side, colIdx);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, colIdx);
+  if (mi !== undefined) {
+    diffCols[other].delete(mi);
+    movAvgCols[other].set(mi, windowSize);
+    applyDiffHeader(other, mi);
+    applyMovAvgHeader(other, mi);
+  }
+  scheduleRender();
+  updateToolbar();
+}
+
+function clearTransform(side: Side, colIdx: number): void {
+  diffCols[side].delete(colIdx);
+  movAvgCols[side].delete(colIdx);
+  applyDiffHeader(side, colIdx);
+  applyMovAvgHeader(side, colIdx);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, colIdx);
+  if (mi !== undefined) {
+    diffCols[other].delete(mi);
+    movAvgCols[other].delete(mi);
+    applyDiffHeader(other, mi);
+    applyMovAvgHeader(other, mi);
+  }
+  scheduleRender();
+  updateToolbar();
+}
+
+function setXAxis(side: Side, colIdx: number): void {
+  xAxisCol[side] = colIdx;
+  selectedCols[side].add(colIdx);
+  applyHighlight(side);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, colIdx);
+  if (mi !== undefined) {
+    xAxisCol[other] = mi;
+    selectedCols[other].add(mi);
+    applyHighlight(other);
+  }
+  updateToolbar();
+}
+
+function resetXAxis(side: Side): void {
+  xAxisCol[side] = 0;
+  selectedCols[side].add(0);
+  applyHighlight(side);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, 0);
+  if (mi !== undefined || reverseMapping.get(0) !== undefined) {
+    xAxisCol[other] = 0;
+    selectedCols[other].add(0);
+    applyHighlight(other);
+  }
+  updateToolbar();
+}
+
+function gotoNextDiff(side: Side, colIdx: number): void {
+  const otherCol = getMappedCol(side, colIdx);
+  if (otherCol === undefined) return;
+  const start = (crosshairRowIdx !== null ? crosshairRowIdx + 1 : 0);
+  for (let pass = 0; pass < 2; pass++) {
+    const from = pass === 0 ? start : 0;
+    const to = pass === 0 ? displayRowCount : (crosshairRowIdx ?? 0);
+    for (let i = from; i < to; i++) {
+      if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
+        crosshairRowIdx = i;
+        applyRowHighlight('left');
+        applyRowHighlight('right');
+        scrollToRow(i);
+        return;
+      }
+    }
+  }
+}
+
+function gotoPrevDiff(side: Side, colIdx: number): void {
+  const otherCol = getMappedCol(side, colIdx);
+  if (otherCol === undefined) return;
+  const start = (crosshairRowIdx !== null ? crosshairRowIdx - 1 : displayRowCount - 1);
+  for (let pass = 0; pass < 2; pass++) {
+    const from = pass === 0 ? start : displayRowCount - 1;
+    const to = pass === 0 ? -1 : (crosshairRowIdx ?? displayRowCount);
+    for (let i = from; i > to; i--) {
+      if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
+        crosshairRowIdx = i;
+        applyRowHighlight('left');
+        applyRowHighlight('right');
+        scrollToRow(i);
+        return;
+      }
+    }
+  }
+}
+
+function resetAll(): void {
+  xAxisCol.left = 0; xAxisCol.right = 0;
+  diffCols.left.clear(); diffCols.right.clear();
+  movAvgCols.left.clear(); movAvgCols.right.clear();
+  if (leftData) {
+    for (let i = 0; i < leftData.headers.length; i++) {
+      applyDiffHeader('left', i);
+      applyMovAvgHeader('left', i);
+    }
+    applyHighlight('left');
+  }
+  if (rightData) {
+    for (let i = 0; i < rightData.headers.length; i++) {
+      applyDiffHeader('right', i);
+      applyMovAvgHeader('right', i);
+    }
+    applyHighlight('right');
+  }
+  scheduleRender();
+  updateToolbar();
+}
+
+// ---- Table init ----
+
+const PX_PER_CHAR = 9;
+const PADDING = 24;
+
+function initPane(side: Side, data: ParsedFile): void {
+  const rowNumPx = Math.max(String(displayRowCount).length * PX_PER_CHAR + PADDING, 40);
+  const table = document.getElementById(`${side}-table`)!;
+  table.style.setProperty('--row-num-width', `${rowNumPx}px`);
+
+  const n = data.rows.length;
+  const s = Math.min(100, n);
+  let maxLen = data.headers[0]?.length ?? 0;
+  for (let i = 0; i < s; i++) {
+    const v = data.rows[i]?.[0];
+    if (v && v.length > maxLen) maxLen = v.length;
+  }
+  for (let i = Math.max(s, n - 100); i < n; i++) {
+    const v = data.rows[i]?.[0];
+    if (v && v.length > maxLen) maxLen = v.length;
+  }
+  const colFirstPx = Math.max(maxLen * PX_PER_CHAR + PADDING, 50);
+  table.style.setProperty('--col-first-width', `${colFirstPx}px`);
+
+  const colIndexRow = document.getElementById(`${side}-col-index-row`)!;
+  colIndexRow.innerHTML = '';
+  const thEmpty = document.createElement('th');
+  thEmpty.className = 'row-num-cell align-right';
+  colIndexRow.appendChild(thEmpty);
+  data.headers.forEach((_, colIdx) => {
+    const th = document.createElement('th');
+    th.textContent = String(colIdx + 1);
+    th.dataset.colIndex = String(colIdx);
+    th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
+    colIndexRow.appendChild(th);
+  });
+
+  const headerRow = document.getElementById(`${side}-header-row`)!;
+  headerRow.innerHTML = '';
+  const thRowNum = document.createElement('th');
+  thRowNum.textContent = '#';
+  thRowNum.className = 'row-num-cell align-right';
+  headerRow.appendChild(thRowNum);
+  data.headers.forEach((header, colIdx) => {
+    const th = document.createElement('th');
+    th.textContent = header;
+    th.dataset.colIndex = String(colIdx);
+    const hasDiff = diffColumnSet[side].has(colIdx) ? ' col-has-diff' : '';
+    th.className = (colIdx === 0 ? 'align-left col-first' : 'align-left') + hasDiff;
+    th.addEventListener('click', e => handleColumnClick(side, colIdx, e as MouseEvent));
+    headerRow.appendChild(th);
+  });
+
+  // Initial column selection: col 0
+  selectedCols[side].clear();
+  selectedCols[side].add(0);
+  xAxisCol[side] = 0;
+
+  renderBody(side);
+
+  requestAnimationFrame(() => {
+    const firstRow = document.querySelector(`#${side}-data-body tr[data-row-index]`) as HTMLElement | null;
+    if (firstRow) {
+      const h = firstRow.getBoundingClientRect().height;
+      if (h > 0) ROW_HEIGHT = h;
+    }
+    const rowNumTh = document.querySelector(`#${side}-table th.row-num-cell`) as HTMLElement | null;
+    if (rowNumTh) {
+      document.documentElement.style.setProperty('--col-index-height', `${rowNumTh.getBoundingClientRect().height}px`);
+    }
+  });
+}
+
+// ---- Scroll ----
+
+function syncViewport(): void {
+  const graphContainer = document.getElementById('graph-container')!;
+  if (graphContainer.classList.contains('hidden')) return;
+  const pane = document.getElementById('left-pane')!;
+  const rh = ROW_HEIGHT;
+  const startRow = Math.floor(pane.scrollTop / rh);
+  const endRow = Math.ceil((pane.scrollTop + pane.clientHeight) / rh);
+  updateViewport(startRow, endRow);
+}
+
+function scrollToRow(rowIdx: number): void {
+  const pane = document.getElementById('left-pane')!;
+  const clientHeight = pane.clientHeight;
+  const rowTop = rowIdx * ROW_HEIGHT;
+  const scrollTop = pane.scrollTop;
+  if (rowTop < scrollTop || rowTop + ROW_HEIGHT > scrollTop + clientHeight) {
+    const newTop = Math.max(0, rowTop - clientHeight / 3);
+    pane.scrollTop = newTop;
+    document.getElementById('right-pane')!.scrollTop = newTop;
+  }
+  scheduleRender();
+}
+
+// ---- Context menu ----
+
+let ctxSide: Side = 'left';
+let ctxColIdx: number = -1;
+
+function initContextMenu(): void {
+  const menuEl = document.getElementById('context-menu')!;
+
+  document.getElementById('ctx-reset-xaxis')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    resetXAxis(ctxSide);
+  });
+  document.getElementById('ctx-set-xaxis')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) setXAxis(ctxSide, ctxColIdx);
+  });
+  document.getElementById('ctx-show-diff')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) setDiff(ctxSide, ctxColIdx);
+  });
+  document.getElementById('ctx-show-original')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) clearTransform(ctxSide, ctxColIdx);
+  });
+  document.getElementById('ctx-goto-next-diff')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) gotoNextDiff(ctxSide, ctxColIdx);
+  });
+  document.getElementById('ctx-goto-prev-diff')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) gotoPrevDiff(ctxSide, ctxColIdx);
+  });
+  [10, 30, 100, 1000].forEach(n => {
+    document.getElementById(`ctx-show-movavg-${n}`)!.addEventListener('click', () => {
+      menuEl.classList.add('hidden');
+      if (ctxColIdx >= 0) setMovAvg(ctxSide, ctxColIdx, n);
+    });
+  });
+
+  document.addEventListener('click', () => menuEl.classList.add('hidden'));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') menuEl.classList.add('hidden'); });
+}
+
+function showContextMenu(side: Side, x: number, y: number, colIndex: number): void {
+  ctxSide = side;
+  ctxColIdx = colIndex;
+
+  const isXAxis = colIndex >= 0 && colIndex === xAxisCol[side];
+  const isDiff = colIndex >= 0 && diffCols[side].has(colIndex);
+  const movAvgWin = colIndex >= 0 ? movAvgCols[side].get(colIndex) : undefined;
+  const isTransformed = isDiff || movAvgWin !== undefined;
+  const xAxisIsDefault = xAxisCol[side] === 0;
+
+  const setItemVisible = (id: string, visible: boolean) =>
+    document.getElementById(id)!.classList.toggle('hidden', !visible);
+
+  setItemVisible('ctx-reset-xaxis', isXAxis && !xAxisIsDefault);
+  setItemVisible('ctx-set-xaxis', colIndex >= 0 && !isXAxis);
+  setItemVisible('ctx-show-diff', colIndex >= 0 && !isTransformed);
+  setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !isDiff && movAvgWin !== 10);
+  setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !isDiff && movAvgWin !== 30);
+  setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !isDiff && movAvgWin !== 100);
+  setItemVisible('ctx-show-movavg-1000', colIndex >= 0 && !isDiff && movAvgWin !== 1000);
+  setItemVisible('ctx-show-original', colIndex >= 0 && isTransformed);
+  const hasDiffCol = colIndex >= 0 && diffColumnSet[side].has(colIndex);
+  setItemVisible('ctx-diff-sep', hasDiffCol);
+  setItemVisible('ctx-goto-next-diff', hasDiffCol);
+  setItemVisible('ctx-goto-prev-diff', hasDiffCol);
+
+  const menuEl = document.getElementById('context-menu')!;
+  menuEl.style.left = `${x}px`;
+  menuEl.style.top = `${y}px`;
+  menuEl.classList.remove('hidden');
+}
+
+// ---- Message handling ----
+
+window.addEventListener('message', (event: MessageEvent) => {
+  const msg = event.data as ExtensionToWebviewMessage;
+
+  if (msg.type === 'loadCompareData') {
+    leftData = msg.left;
+    rightData = msg.right;
+    displayRowCount = Math.min(leftData.rows.length, rightData.rows.length);
+    buildColumnMapping(leftData.headers, rightData.headers);
+
+    document.getElementById('left-file-name')!.textContent = leftData.fileName;
+    document.getElementById('right-file-name')!.textContent = rightData.fileName;
+
+    const delimInfo = `delimiters: ${fmtDelim(leftData.delimiter)} / ${fmtDelim(rightData.delimiter)}`;
+    document.getElementById('delimiter-info')!.textContent = delimInfo;
+
+    const maxRows = Math.max(leftData.rows.length, rightData.rows.length);
+    if (leftData.truncated || rightData.truncated || leftData.rows.length !== rightData.rows.length) {
+      document.getElementById('truncate-notice')!.textContent =
+        `Comparing ${displayRowCount.toLocaleString()} rows (of ${leftData.rows.length.toLocaleString()} / ${rightData.rows.length.toLocaleString()})`;
+      document.getElementById('truncate-notice')!.classList.remove('hidden');
+    }
+    void maxRows;
+
+    computeDiffColumns();
+    initPane('left', leftData);
+    initPane('right', rightData);
+    applyHighlight('left');
+    applyHighlight('right');
+    updateToolbar();
+  } else if (msg.type === 'error') {
+    document.getElementById('compare-wrapper')!.innerHTML =
+      `<div class="error-message">${escapeHtml(msg.message)}</div>`;
+  }
+});
+
+function fmtDelim(d: string): string {
+  if (d === '\t') return 'tab';
+  if (d === ' ') return 'space';
+  return `'${d}'`;
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ---- DOMContentLoaded ----
+
+document.addEventListener('DOMContentLoaded', () => {
+  initContextMenu();
+
+  setRowHighlightCallback((rowIdx: number) => {
+    crosshairRowIdx = rowIdx;
+    applyRowHighlight('left');
+    applyRowHighlight('right');
+    scrollToRow(rowIdx);
+  });
+
+  // Scroll sync
+  const leftPane = document.getElementById('left-pane')!;
+  const rightPane = document.getElementById('right-pane')!;
+
+  leftPane.addEventListener('scroll', () => {
+    if (syncScrollFlag) return;
+    syncScrollFlag = true;
+    rightPane.scrollTop = leftPane.scrollTop;
+    rightPane.scrollLeft = leftPane.scrollLeft;
+    syncScrollFlag = false;
+    scheduleRender();
+    syncViewport();
+  }, { passive: true });
+
+  rightPane.addEventListener('scroll', () => {
+    if (syncScrollFlag) return;
+    syncScrollFlag = true;
+    leftPane.scrollTop = rightPane.scrollTop;
+    leftPane.scrollLeft = rightPane.scrollLeft;
+    syncScrollFlag = false;
+    scheduleRender();
+    syncViewport();
+  }, { passive: true });
+
+  // Context menu on both panes
+  for (const side of ['left', 'right'] as Side[]) {
+    document.getElementById(`${side}-pane`)!.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const target = e.target as HTMLElement;
+      const colIndexStr = target.closest<HTMLElement>('[data-col-index]')?.dataset.colIndex;
+      const colIndex = colIndexStr !== undefined ? parseInt(colIndexStr) : -1;
+      showContextMenu(side, e.clientX, e.clientY, colIndex);
+    });
+  }
+
+  // Graph resize
+  const graphContainer = document.getElementById('graph-container')!;
+  document.getElementById('graph-resize-handle')!.addEventListener('mousedown', e => {
+    const startY = e.clientY;
+    const startHeight = graphContainer.offsetHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      const newHeight = Math.max(80, Math.min(window.innerHeight - 60, startHeight + startY - ev.clientY));
+      graphContainer.style.height = `${newHeight}px`;
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+    }, { once: true });
+    e.preventDefault();
+  });
+
+  // Pane divider drag
+  const divider = document.getElementById('pane-divider')!;
+  const wrapper = document.getElementById('compare-wrapper')!;
+  divider.addEventListener('mousedown', e => {
+    const startX = e.clientX;
+    const startLeftW = leftPane.offsetWidth;
+    const totalW = wrapper.offsetWidth - divider.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      const newLeftW = Math.max(80, Math.min(totalW - 80, startLeftW + ev.clientX - startX));
+      leftPane.style.flex = 'none';
+      leftPane.style.width = `${newLeftW}px`;
+      rightPane.style.flex = '1';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+    }, { once: true });
+    e.preventDefault();
+  });
+
+  // Toolbar buttons
+  document.getElementById('btn-top')!.addEventListener('click', () => {
+    leftPane.scrollTop = 0;
+    rightPane.scrollTop = 0;
+    scheduleRender();
+  });
+  document.getElementById('btn-bottom')!.addEventListener('click', () => {
+    leftPane.scrollTop = leftPane.scrollHeight;
+    rightPane.scrollTop = rightPane.scrollHeight;
+    scheduleRender();
+  });
+  document.getElementById('btn-left')!.addEventListener('click', () => {
+    leftPane.scrollLeft = 0;
+    rightPane.scrollLeft = 0;
+  });
+  document.getElementById('btn-right')!.addEventListener('click', () => {
+    leftPane.scrollLeft = leftPane.scrollWidth;
+    rightPane.scrollLeft = rightPane.scrollWidth;
+  });
+
+  document.getElementById('btn-show-graph')!.addEventListener('click', () => {
+    if (!leftData || !rightData) return;
+    resetZoom();
+    renderGraph(
+      leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
+      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right }
+    );
+    syncViewport();
+  });
+
+  document.getElementById('btn-reset-all')!.addEventListener('click', resetAll);
+
+  document.getElementById('btn-close-graph')!.addEventListener('click', () => {
+    closeGraph();
+    crosshairRowIdx = null;
+    applyRowHighlight('left');
+    applyRowHighlight('right');
+  });
+
+  document.getElementById('sel-line-width')!.addEventListener('change', e => {
+    setLineWidth(parseFloat((e.target as HTMLSelectElement).value));
+  });
+  document.getElementById('sel-marker')!.addEventListener('change', e => {
+    setMarkerStyle((e.target as HTMLSelectElement).value);
+  });
+
+  vscode.postMessage({ type: 'ready' });
+});

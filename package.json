@@ -2,7 +2,7 @@
   "name": "tabledataview",
   "displayName": "TableDataView",
   "description": "View CSV/TSV/DAT files as interactive tables with graph support",
-  "version": "0.3.7",
+  "version": "0.4.0",
   "publisher": "reingel",
   "repository": {
     "type": "git",
@@ -24,6 +24,11 @@
         "command": "tableDataView.openTableView",
         "title": "TableDataView: table view",
         "category": "TableDataView"
+      },
+      {
+        "command": "tableDataView.compareFiles",
+        "title": "TableDataView: compare",
+        "category": "TableDataView"
       }
     ],
     "menus": {
@@ -31,7 +36,12 @@
         {
           "command": "tableDataView.openTableView",
           "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "tableDataView.compareFiles",
+          "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat",
+          "group": "navigation@2"
         }
       ],
       "editor/context": [

@@ -1,8 +1,13 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { TableViewProvider } from './tableViewProvider';
+import { CompareViewProvider } from './compareViewProvider';
+
+const DATA_EXTS = ['.csv', '.tsv', '.txt', '.dat'];
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new TableViewProvider(context);
+  const compareProvider = new CompareViewProvider(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('tableDataView.openTableView', (uri?: vscode.Uri) => {
@@ -15,6 +20,23 @@ export function activate(context: vscode.ExtensionContext): void {
         uri = editor.document.uri;
       }
       provider.createOrShowPanel(uri);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('tableDataView.compareFiles', (clicked?: vscode.Uri, all?: vscode.Uri[]) => {
+      const files = (all ?? (clicked ? [clicked] : [])).filter(u =>
+        DATA_EXTS.includes(path.extname(u.fsPath).toLowerCase())
+      );
+      if (files.length < 2) {
+        vscode.window.showInformationMessage('TableDataView: Ctrl+click to select 2 data files, then right-click to compare.');
+        return;
+      }
+      if (files.length > 2) {
+        vscode.window.showErrorMessage('TableDataView: Select exactly 2 data files to compare.');
+        return;
+      }
+      compareProvider.createOrShowPanel(files[0], files[1]);
     })
   );
 }

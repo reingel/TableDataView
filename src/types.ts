@@ -10,6 +10,7 @@ export interface ParsedFile {
 
 export type ExtensionToWebviewMessage =
   | { type: 'loadData'; payload: ParsedFile }
+  | { type: 'loadCompareData'; left: ParsedFile; right: ParsedFile }
   | { type: 'error'; message: string };
 
 export type WebviewToExtensionMessage =

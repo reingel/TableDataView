@@ -26,18 +26,28 @@ const webviewOptions = {
   platform: 'browser',
 };
 
+const compareWebviewOptions = {
+  ...commonOptions,
+  entryPoints: ['src/webview/compareMain.ts'],
+  outfile: 'out/compareWebview.js',
+  format: 'iife',
+  platform: 'browser',
+};
+
 async function build() {
   if (isWatch) {
-    const [extCtx, webCtx] = await Promise.all([
+    const [extCtx, webCtx, cmpCtx] = await Promise.all([
       esbuild.context(extensionOptions),
       esbuild.context(webviewOptions),
+      esbuild.context(compareWebviewOptions),
     ]);
-    await Promise.all([extCtx.watch(), webCtx.watch()]);
+    await Promise.all([extCtx.watch(), webCtx.watch(), cmpCtx.watch()]);
     console.log('Watching for changes...');
   } else {
     await Promise.all([
       esbuild.build(extensionOptions),
       esbuild.build(webviewOptions),
+      esbuild.build(compareWebviewOptions),
     ]);
     console.log('Build complete.');
   }
