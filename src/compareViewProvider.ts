@@ -49,7 +49,7 @@ export class CompareViewProvider {
     panel.webview.html = this.getWebviewContent(panel.webview, scriptUri);
 
     panel.webview.onDidReceiveMessage((msg: WebviewToExtensionMessage) => {
-      if (msg.type === 'ready') {
+      if (msg.type === 'ready' || msg.type === 'reload') {
         this.loadFiles(panel, uri1, uri2);
       }
     });
@@ -339,6 +339,7 @@ export class CompareViewProvider {
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
+    <button id="btn-reload" style="margin-left:auto;">Reload</button>
   </div>
 
   <div id="compare-wrapper">

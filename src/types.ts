@@ -15,4 +15,5 @@ export type ExtensionToWebviewMessage =
 
 export type WebviewToExtensionMessage =
   | { type: 'ready' }
+  | { type: 'reload' }
   | { type: 'showGraph'; columns: number[] };

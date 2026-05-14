@@ -42,6 +42,16 @@ function computeDiffColumns(): void {
   }
 }
 
+type CompareReloadState = {
+  scrollTop: number; scrollLeft: number;
+  leftHeaders: string[]; rightHeaders: string[];
+  selectedL: number[]; selectedR: number[];
+  xAxisL: number; xAxisR: number;
+  diffL: number[]; diffR: number[];
+  movAvgL: Array<[number, number]>; movAvgR: Array<[number, number]>;
+};
+let pendingReload: CompareReloadState | null = null;
+
 // Crosshair state
 let crosshairRowIdx: number | null = null;
 
@@ -497,6 +507,45 @@ function gotoPrevDiff(side: Side, colIdx: number): void {
   }
 }
 
+function saveCompareReloadState(): void {
+  if (!leftData || !rightData) return;
+  const pane = document.getElementById('left-pane')!;
+  pendingReload = {
+    scrollTop: pane.scrollTop, scrollLeft: pane.scrollLeft,
+    leftHeaders: leftData.headers.slice(), rightHeaders: rightData.headers.slice(),
+    selectedL: Array.from(selectedCols.left), selectedR: Array.from(selectedCols.right),
+    xAxisL: xAxisCol.left, xAxisR: xAxisCol.right,
+    diffL: Array.from(diffCols.left), diffR: Array.from(diffCols.right),
+    movAvgL: Array.from(movAvgCols.left.entries()), movAvgR: Array.from(movAvgCols.right.entries()),
+  };
+}
+
+function restoreCompareReloadState(): void {
+  const s = pendingReload;
+  pendingReload = null;
+  if (!s || !leftData || !rightData) return;
+  if (s.leftHeaders.join('\0') !== leftData.headers.join('\0')) return;
+  if (s.rightHeaders.join('\0') !== rightData.headers.join('\0')) return;
+
+  for (const c of s.diffL) { diffCols.left.add(c); applyDiffHeader('left', c); }
+  for (const c of s.diffR) { diffCols.right.add(c); applyDiffHeader('right', c); }
+  for (const [c, w] of s.movAvgL) { movAvgCols.left.set(c, w); applyMovAvgHeader('left', c); }
+  for (const [c, w] of s.movAvgR) { movAvgCols.right.set(c, w); applyMovAvgHeader('right', c); }
+  xAxisCol.left = s.xAxisL; xAxisCol.right = s.xAxisR;
+  selectedCols.left = new Set(s.selectedL);
+  selectedCols.right = new Set(s.selectedR);
+  applyHighlight('left');
+  applyHighlight('right');
+  computeDiffColumns();
+  scheduleRender();
+  requestAnimationFrame(() => {
+    const pane = document.getElementById('left-pane')!;
+    const rPane = document.getElementById('right-pane')!;
+    pane.scrollTop = s.scrollTop; pane.scrollLeft = s.scrollLeft;
+    rPane.scrollTop = s.scrollTop; rPane.scrollLeft = s.scrollLeft;
+  });
+}
+
 function resetAll(): void {
   xAxisCol.left = 0; xAxisCol.right = 0;
   diffCols.left.clear(); diffCols.right.clear();
@@ -722,6 +771,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     initPane('right', rightData);
     applyHighlight('left');
     applyHighlight('right');
+    restoreCompareReloadState();
     updateToolbar();
   } else if (msg.type === 'error') {
     document.getElementById('compare-wrapper')!.innerHTML =
@@ -861,6 +911,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-reset-all')!.addEventListener('click', resetAll);
+  document.getElementById('btn-reload')!.addEventListener('click', () => {
+    saveCompareReloadState();
+    vscode.postMessage({ type: 'reload' });
+  });
 
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();

@@ -15,6 +15,14 @@ export function getData(): ParsedFile | null {
   return currentData;
 }
 
+export function getDiffColsSnapshot(): number[] {
+  return Array.from(diffCols);
+}
+
+export function getMovAvgColsSnapshot(): Array<[number, number]> {
+  return Array.from(movAvgCols.entries());
+}
+
 export function getRowHeight(): number {
   return ROW_HEIGHT;
 }
