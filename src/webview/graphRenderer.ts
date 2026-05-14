@@ -17,6 +17,7 @@ let rowIndexMap: number[] = [];
 let rowHighlightCallback: ((rowIdx: number) => void) | null = null;
 let canvasListenerAdded = false;
 let lastXAxisCol: number = 0;
+let lastRightData: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number } | undefined;
 let viewportStartRow: number = 0;
 let viewportEndRow: number = 0;
 let zoomXMin: number | null = null;
@@ -35,32 +36,38 @@ export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
 
 type DataPoint = { x: number; y: number; rowIdx: number };
 
+function buildSegments(rows: string[][], xAxisCol: number, colIdx: number, useColAsX: boolean, indexMap: number[]): DataPoint[][] {
+  const segments: DataPoint[][] = [];
+  let cur: DataPoint[] = [];
+  rows.forEach((row, i) => {
+    const xVal = useColAsX ? parseFloat(row[xAxisCol]) : indexMap[i];
+    const yVal = parseFloat(row[colIdx]);
+    if (isFinite(xVal) && isFinite(yVal)) {
+      cur.push({ x: xVal, y: yVal, rowIdx: indexMap[i] });
+    } else if (cur.length > 0) {
+      segments.push(cur);
+      cur = [];
+    }
+  });
+  if (cur.length > 0) segments.push(cur);
+  return segments;
+}
+
 function buildDatasets(): any[] {
   const useColAsX = lastCols.includes(lastXAxisCol);
   const dataCols = getDataCols();
   const result: any[] = [];
+  const hasRight = lastRightData !== undefined;
+  const labelPrefix = hasRight ? 'L: ' : '';
 
   dataCols.forEach((colIdx, colorIdx) => {
     const color = PALETTE[colorIdx % PALETTE.length];
-    const segments: DataPoint[][] = [];
-    let cur: DataPoint[] = [];
-
-    displayRows.forEach((row, i) => {
-      const xVal = useColAsX ? parseFloat(row[lastXAxisCol]) : rowIndexMap[i];
-      const yVal = parseFloat(row[colIdx]);
-      if (isFinite(xVal) && isFinite(yVal)) {
-        cur.push({ x: xVal, y: yVal, rowIdx: rowIndexMap[i] });
-      } else if (cur.length > 0) {
-        segments.push(cur);
-        cur = [];
-      }
-    });
-    if (cur.length > 0) segments.push(cur);
+    const segments = buildSegments(displayRows, lastXAxisCol, colIdx, useColAsX, rowIndexMap);
     if (segments.length === 0) return;
 
     segments.forEach((seg, si) => {
       result.push({
-        label: si === 0 ? lastHeaders[colIdx] : '',
+        label: si === 0 ? labelPrefix + lastHeaders[colIdx] : '',
         data: seg,
         tension: 0.1,
         fill: false,
@@ -72,6 +79,38 @@ function buildDatasets(): any[] {
       });
     });
   });
+
+  if (lastRightData) {
+    const rd = lastRightData;
+    const useRightColAsX = rd.selectedCols.includes(rd.xAxisCol);
+    const rightDataCols = rd.selectedCols.includes(rd.xAxisCol)
+      ? rd.selectedCols.filter(c => c !== rd.xAxisCol).length > 0
+        ? rd.selectedCols.filter(c => c !== rd.xAxisCol)
+        : [rd.xAxisCol]
+      : rd.selectedCols;
+    const rightIndexMap = rd.rows.map((_, i) => i);
+
+    rightDataCols.forEach((colIdx, colorIdx) => {
+      const color = PALETTE[(colorIdx + Math.ceil(PALETTE.length / 2)) % PALETTE.length];
+      const segments = buildSegments(rd.rows, rd.xAxisCol, colIdx, useRightColAsX, rightIndexMap);
+      if (segments.length === 0) return;
+
+      segments.forEach((seg, si) => {
+        result.push({
+          label: si === 0 ? 'R: ' + rd.headers[colIdx] : '',
+          data: seg,
+          tension: 0.1,
+          fill: false,
+          borderWidth: lineWidth,
+          borderDash: [5, 3],
+          borderColor: color,
+          backgroundColor: color,
+          pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
+          showLine: true,
+        });
+      });
+    });
+  }
 
   return result;
 }
@@ -282,7 +321,10 @@ export function resetZoom(): void {
   zoomXMax = null;
 }
 
-export function renderGraph(headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0): void {
+export function renderGraph(
+  headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0,
+  rightData?: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number }
+): void {
   if (xAxisCol !== lastXAxisCol) {
     zoomXMin = null;
     zoomXMax = null;
@@ -292,6 +334,7 @@ export function renderGraph(headers: string[], rows: string[][], selectedCols: n
   lastRows = rows;
   lastCols = selectedCols;
   lastXAxisCol = xAxisCol;
+  lastRightData = rightData;
   crosshairDataX = null;
   crosshairOrigRowIdx = null;
 
@@ -339,7 +382,7 @@ function redraw(): void {
       animation: false,
       plugins: {
         legend: {
-          display: dataCols.length > 1,
+          display: dataCols.length > 1 || lastRightData !== undefined,
           labels: { filter: (item: any) => item.text !== '' },
         },
         tooltip: { enabled: false },

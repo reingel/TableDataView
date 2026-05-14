@@ -1,6 +1,6 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue } from './tableRenderer';
-import { getSelected, getXAxisCol, setXAxisCol, resetXAxis } from './columnSelector';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot } from './tableRenderer';
+import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
 
@@ -10,6 +10,39 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 let currentData: ParsedFile | null = null;
+
+type ReloadState = {
+  scrollTop: number; scrollLeft: number;
+  headers: string[];
+  selectedCols: number[]; xAxisCol: number;
+  diffCols: number[]; movAvgCols: Array<[number, number]>;
+};
+let pendingReload: ReloadState | null = null;
+
+function saveReloadState(): void {
+  if (!currentData) return;
+  const c = document.getElementById('table-container')!;
+  pendingReload = {
+    scrollTop: c.scrollTop, scrollLeft: c.scrollLeft,
+    headers: currentData.headers.slice(),
+    selectedCols: getSelected(), xAxisCol: getXAxisCol(),
+    diffCols: getDiffColsSnapshot(), movAvgCols: getMovAvgColsSnapshot(),
+  };
+}
+
+function restoreReloadState(headers: string[]): void {
+  const s = pendingReload;
+  pendingReload = null;
+  if (!s || s.headers.join('\0') !== headers.join('\0')) return;
+  for (const col of s.diffCols) setDiff(col);
+  for (const [col, ws] of s.movAvgCols) setMovAvg(col, ws);
+  restoreSelection(s.selectedCols, s.xAxisCol);
+  requestAnimationFrame(() => {
+    const c = document.getElementById('table-container')!;
+    c.scrollTop = s.scrollTop;
+    c.scrollLeft = s.scrollLeft;
+  });
+}
 
 function updateToolbar(): void {
   const selected = getSelected();
@@ -61,6 +94,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     }
 
     renderTable(msg.payload, updateToolbar);
+    restoreReloadState(msg.payload.headers);
     updateToolbar();
   } else if (msg.type === 'error') {
     const container = document.getElementById('table-container')!;
@@ -187,6 +221,10 @@ document.addEventListener('DOMContentLoaded', () => {
     clearAllDiff();
     clearAllMovAvg();
     updateToolbar();
+  });
+  document.getElementById('btn-reload')!.addEventListener('click', () => {
+    saveReloadState();
+    vscode.postMessage({ type: 'reload' });
   });
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();

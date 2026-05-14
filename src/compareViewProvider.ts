@@ -15,13 +15,13 @@ function getNonce(): string {
   return text;
 }
 
-export class TableViewProvider {
+export class CompareViewProvider {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
-  createOrShowPanel(uri: vscode.Uri): void {
-    const key = uri.fsPath;
+  createOrShowPanel(uri1: vscode.Uri, uri2: vscode.Uri): void {
+    const key = uri1.fsPath + '|' + uri2.fsPath;
     const existing = this.panels.get(key);
     if (existing) {
       existing.reveal();
@@ -29,8 +29,8 @@ export class TableViewProvider {
     }
 
     const panel = vscode.window.createWebviewPanel(
-      'tableDataView',
-      path.basename(uri.fsPath),
+      'tableDataViewCompare',
+      `${path.basename(uri1.fsPath)} ↔ ${path.basename(uri2.fsPath)}`,
       vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -43,33 +43,35 @@ export class TableViewProvider {
     panel.onDidDispose(() => this.panels.delete(key));
 
     const scriptUri = panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'out', 'webview.js')
+      vscode.Uri.joinPath(this.context.extensionUri, 'out', 'compareWebview.js')
     );
 
     panel.webview.html = this.getWebviewContent(panel.webview, scriptUri);
 
     panel.webview.onDidReceiveMessage((msg: WebviewToExtensionMessage) => {
       if (msg.type === 'ready' || msg.type === 'reload') {
-        this.loadFile(panel, uri);
+        this.loadFiles(panel, uri1, uri2);
       }
     });
   }
 
-  private loadFile(panel: vscode.WebviewPanel, uri: vscode.Uri): void {
+  private loadFiles(panel: vscode.WebviewPanel, uri1: vscode.Uri, uri2: vscode.Uri): void {
     try {
-      const stat = fs.statSync(uri.fsPath);
-      if (stat.size > FILE_SIZE_WARN_BYTES) {
-        vscode.window.showWarningMessage(
-          `TableDataView: File is ${(stat.size / 1024 / 1024).toFixed(1)} MB. Large files may render slowly.`
-        );
+      for (const uri of [uri1, uri2]) {
+        const stat = fs.statSync(uri.fsPath);
+        if (stat.size > FILE_SIZE_WARN_BYTES) {
+          vscode.window.showWarningMessage(
+            `TableDataView: ${path.basename(uri.fsPath)} is ${(stat.size / 1024 / 1024).toFixed(1)} MB. Large files may render slowly.`
+          );
+        }
       }
 
-      const content = fs.readFileSync(uri.fsPath, 'utf-8');
-      const parsed = parseFile(content, uri.fsPath);
-      panel.webview.postMessage({ type: 'loadData', payload: parsed });
+      const left = parseFile(fs.readFileSync(uri1.fsPath, 'utf-8'), uri1.fsPath);
+      const right = parseFile(fs.readFileSync(uri2.fsPath, 'utf-8'), uri2.fsPath);
+      panel.webview.postMessage({ type: 'loadCompareData', left, right });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      panel.webview.postMessage({ type: 'error', message: `Failed to read file: ${message}` });
+      panel.webview.postMessage({ type: 'error', message: `Failed to read files: ${message}` });
     }
   }
 
@@ -88,7 +90,7 @@ export class TableViewProvider {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TableDataView</title>
+  <title>TableDataView Compare</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body {
@@ -114,7 +116,8 @@ export class TableViewProvider {
       z-index: 10;
       flex-wrap: wrap;
     }
-    #file-name { font-weight: bold; margin-right: 4px; }
+    .file-name { font-weight: bold; margin-right: 2px; }
+    .compare-sep { color: var(--vscode-descriptionForeground); margin: 0 2px; }
     #delimiter-info { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-right: 8px; }
     #truncate-notice {
       color: var(--vscode-notificationsWarningIcon-foreground, orange);
@@ -138,11 +141,24 @@ export class TableViewProvider {
       color: var(--vscode-inputValidation-warningForeground, #fff);
     }
     #btn-reset-all:hover { background: var(--vscode-editorWarning-foreground, #b87000); }
-    #table-container {
-      overflow: auto;
+    #compare-wrapper {
+      display: flex;
       flex: 1;
+      overflow: hidden;
       min-height: 0;
     }
+    .pane {
+      flex: 1;
+      overflow: auto;
+      min-width: 0;
+    }
+    #pane-divider {
+      width: 4px;
+      flex-shrink: 0;
+      cursor: col-resize;
+      background: var(--vscode-panel-border, #444);
+    }
+    #pane-divider:hover { background: var(--vscode-focusBorder, #007acc); }
     table {
       border-collapse: separate;
       border-spacing: 0;
@@ -169,13 +185,13 @@ export class TableViewProvider {
       top: 0;
       z-index: 5;
     }
-    #col-index-row th {
+    .col-index-row th {
       color: var(--vscode-descriptionForeground);
       font-size: 0.8em;
       font-weight: normal;
       top: 0;
     }
-    #header-row th {
+    .header-row th {
       top: var(--col-index-height, 0px);
     }
     th.selected {
@@ -254,6 +270,8 @@ export class TableViewProvider {
       font-size: 0.9em;
     }
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
+    .ctx-separator { height: 1px; background: var(--vscode-menu-border, #454545); margin: 4px 0; padding: 0; cursor: default; pointer-events: none; }
+    .ctx-separator:hover { background: var(--vscode-menu-border, #454545); }
     th.x-axis {
       box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.35);
       color: var(--vscode-editor-foreground, var(--vscode-foreground));
@@ -267,6 +285,9 @@ export class TableViewProvider {
     td.diff-col { color: #7ec8a0; }
     th.movavg-col { color: #7ec8e8; }
     td.movavg-col { color: #7ec8e8; }
+    td.col-has-diff { background: rgba(200, 50, 50, 0.25) !important; }
+    th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(200, 50, 50, 0.28); }
+    td.value-diff { background: rgba(210, 180, 0, 0.65) !important; }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;
@@ -305,7 +326,9 @@ export class TableViewProvider {
 </head>
 <body>
   <div id="toolbar">
-    <span id="file-name"></span>
+    <span id="left-file-name" class="file-name"></span>
+    <span class="compare-sep">↔</span>
+    <span id="right-file-name" class="file-name"></span>
     <span id="delimiter-info"></span>
     <span id="truncate-notice" class="hidden"></span>
     <div class="toolbar-sep"></div>
@@ -319,14 +342,26 @@ export class TableViewProvider {
     <button id="btn-reload" style="margin-left:auto;">Reload</button>
   </div>
 
-  <div id="table-container">
-    <table id="data-table">
-      <thead>
-        <tr id="col-index-row"></tr>
-        <tr id="header-row"></tr>
-      </thead>
-      <tbody id="data-body"></tbody>
-    </table>
+  <div id="compare-wrapper">
+    <div id="left-pane" class="pane">
+      <table id="left-table">
+        <thead>
+          <tr id="left-col-index-row" class="col-index-row"></tr>
+          <tr id="left-header-row" class="header-row"></tr>
+        </thead>
+        <tbody id="left-data-body"></tbody>
+      </table>
+    </div>
+    <div id="pane-divider"></div>
+    <div id="right-pane" class="pane">
+      <table id="right-table">
+        <thead>
+          <tr id="right-col-index-row" class="col-index-row"></tr>
+          <tr id="right-header-row" class="header-row"></tr>
+        </thead>
+        <tbody id="right-data-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <div id="context-menu" class="hidden">
@@ -339,6 +374,9 @@ export class TableViewProvider {
       <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
       <li id="ctx-show-movavg-1000">Show moving averages (n=1000)</li>
       <li id="ctx-show-original">Show original values</li>
+      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-goto-next-diff" class="hidden">Go to next different value</li>
+      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different value</li>
     </ul>
   </div>
 

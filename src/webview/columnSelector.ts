@@ -66,6 +66,15 @@ export function applyHighlight(): void {
   }
 }
 
+export function restoreSelection(cols: number[], xAxis: number): void {
+  selectedColumns.clear();
+  xAxisCol = xAxis;
+  cols.forEach(c => { if (c < totalColumns) selectedColumns.add(c); });
+  selectedColumns.add(xAxisCol);
+  applyHighlight();
+  onSelectionChange?.();
+}
+
 export function reset(): void {
   selectedColumns.clear();
   xAxisCol = 0;
