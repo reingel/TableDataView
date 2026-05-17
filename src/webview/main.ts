@@ -2,7 +2,7 @@ import { ExtensionToWebviewMessage, ParsedFile } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, resetZoom, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
+import { renderGraph, resetZoom, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -52,6 +52,7 @@ function updateToolbar(): void {
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
     renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
+    if (isFFTPaneVisible()) renderFFTPaneFromGraph();
   }
 }
 
@@ -203,6 +204,25 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
   });
 
+  document.getElementById('fft-divider')!.addEventListener('mousedown', e => {
+    const fftWrapper = document.getElementById('fft-canvas-wrapper')!;
+    const startY = e.clientY;
+    const startH = fftWrapper.offsetHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      const newH = Math.max(60, Math.min(window.innerHeight - 100, startH + startY - ev.clientY));
+      fftWrapper.style.height = `${newH}px`;
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+    }, { once: true });
+    e.preventDefault();
+  });
+
   document.getElementById('btn-top')!.addEventListener('click', () => scrollToRow(0));
   document.getElementById('btn-bottom')!.addEventListener('click', () => {
     const data = getData();
@@ -229,8 +249,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
     setCrosshairRow(null, []);
+    document.getElementById('btn-show-fft')!.textContent = 'Show FFT';
   });
-document.getElementById('sel-line-width')!.addEventListener('change', e => {
+  document.getElementById('btn-show-fft')!.addEventListener('click', () => {
+    if (isFFTPaneVisible()) {
+      closeFFTPane();
+      document.getElementById('btn-show-fft')!.textContent = 'Show FFT';
+    } else {
+      renderFFTPaneFromGraph();
+      document.getElementById('btn-show-fft')!.textContent = 'Hide FFT';
+    }
+  });
+  document.getElementById('sel-line-width')!.addEventListener('change', e => {
     setLineWidth(parseFloat((e.target as HTMLSelectElement).value));
   });
   document.getElementById('sel-marker')!.addEventListener('change', e => {

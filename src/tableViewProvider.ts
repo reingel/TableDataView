@@ -173,6 +173,7 @@ export class TableViewProvider {
       color: var(--vscode-descriptionForeground);
       font-size: 0.8em;
       font-weight: normal;
+      text-align: left;
       top: 0;
     }
     #header-row th {
@@ -300,7 +301,13 @@ export class TableViewProvider {
       line-height: 20px;
       border-bottom: 1px solid var(--vscode-panel-border);
     }
-    #chart-canvas { flex: 1; min-height: 0; cursor: crosshair; }
+    #chart-canvas-wrapper { flex: 1; min-height: 0; overflow: hidden; }
+    #chart-canvas { width: 100%; height: 100%; cursor: crosshair; }
+    #fft-divider { height: 4px; cursor: ns-resize; background: var(--vscode-panel-border); flex-shrink: 0; }
+    #fft-divider:hover { background: var(--vscode-focusBorder, #007acc); }
+    #fft-yvalues { padding: 2px 8px; font-size: 0.8em; white-space: nowrap; overflow-x: auto; flex-shrink: 0; line-height: 20px; border-bottom: 1px solid var(--vscode-panel-border); }
+    #fft-canvas-wrapper { flex-shrink: 0; min-height: 60px; overflow: hidden; }
+    #fft-canvas { width: 100%; height: 100%; cursor: crosshair; }
   </style>
 </head>
 <body>
@@ -346,6 +353,8 @@ export class TableViewProvider {
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
       <span id="graph-title">Graph</span>
+      <button id="btn-show-fft">Show FFT</button>
+      <div style="width:16px;flex-shrink:0;"></div>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width
         <select id="sel-line-width" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
@@ -367,7 +376,10 @@ export class TableViewProvider {
       <button id="btn-close-graph">&#x2715; Close</button>
     </div>
     <div id="graph-yvalues" class="hidden"></div>
-    <canvas id="chart-canvas"></canvas>
+    <div id="chart-canvas-wrapper"><canvas id="chart-canvas"></canvas></div>
+    <div id="fft-divider" class="hidden"></div>
+    <div id="fft-yvalues" class="hidden"></div>
+    <div id="fft-canvas-wrapper" class="hidden"><canvas id="fft-canvas"></canvas></div>
   </div>
 
   <script nonce="${nonce}" src="${scriptUri}"></script>

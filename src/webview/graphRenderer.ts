@@ -1,10 +1,12 @@
 import Chart from 'chart.js/auto';
+import { computeFFT } from './fft';
 
 const DRAG_THRESHOLD = 5;
 const PALETTE = ['#4bc0c0', '#ff6384', '#36a2eb', '#ff9f40', '#9966ff', '#ffcd56', '#c9cbcf'];
 const MARKER_RADIUS: Record<string, number> = { none: 0, dot: 2, circle: 5 };
 
 let chartInstance: any = null;
+let fftChartInstance: any = null;
 let lineWidth: number = 1;
 let markerStyle: string = 'none';
 let crosshairDataX: number | null = null;
@@ -29,6 +31,19 @@ let dragStartPixel = 0;
 let dragCurrentPixel = 0;
 let isPanDown = false;
 let panLastPixel = 0;
+
+let lastFftDatasets: any[] = [];
+let fftCrosshairDataX: number | null = null;
+let fftZoomXMin: number | null = null;
+let fftZoomXMax: number | null = null;
+let fftIsMouseDown = false;
+let fftIsDragging = false;
+let fftMouseDownClientX = 0;
+let fftDragStartPixel = 0;
+let fftDragCurrentPixel = 0;
+let fftIsPanDown = false;
+let fftPanLastPixel = 0;
+let fftCanvasListenerAdded = false;
 
 export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
@@ -181,6 +196,24 @@ const dragSelectPlugin = {
   },
 };
 
+const fftDragSelectPlugin = {
+  id: 'fftDragSelect',
+  afterDraw(chart: any) {
+    if (!fftIsDragging) return;
+    const { chartArea, ctx } = chart;
+    const x1 = Math.max(chartArea.left, Math.min(fftDragStartPixel, fftDragCurrentPixel));
+    const x2 = Math.min(chartArea.right, Math.max(fftDragStartPixel, fftDragCurrentPixel));
+    if (x2 <= x1) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(100,150,255,0.2)';
+    ctx.fillRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+    ctx.strokeStyle = 'rgba(100,150,255,0.8)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x1, chartArea.top, x2 - x1, chartArea.bottom - chartArea.top);
+    ctx.restore();
+  },
+};
+
 function getDataCols(): number[] {
   if (!lastCols.includes(lastXAxisCol)) return lastCols;
   const filtered = lastCols.filter(c => c !== lastXAxisCol);
@@ -314,6 +347,195 @@ function initCanvasListener(): void {
   canvas.addEventListener('dblclick', handleDblClick);
   canvas.addEventListener('wheel', handleWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+const fftCrosshairPlugin = {
+  id: 'fftCrosshairLine',
+  afterDraw(chart: any) {
+    if (fftCrosshairDataX === null || !chart.scales.x) return;
+    const pixelX = chart.scales.x.getPixelForValue(fftCrosshairDataX);
+    const { top, bottom, left, right } = chart.chartArea;
+    if (pixelX < left || pixelX > right) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(pixelX, top);
+    ctx.lineTo(pixelX, bottom);
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
+function updateFftYValues(): void {
+  const overlay = document.getElementById('fft-yvalues');
+  if (!overlay) return;
+  if (fftCrosshairDataX === null || lastFftDatasets.length === 0) {
+    overlay.classList.add('hidden');
+    return;
+  }
+  const parts = lastFftDatasets.map(ds => {
+    const pts = ds.data as { x: number; y: number }[];
+    if (pts.length === 0) return '';
+    const nearest = pts.reduce((a, b) =>
+      Math.abs(b.x - fftCrosshairDataX!) < Math.abs(a.x - fftCrosshairDataX!) ? b : a
+    );
+    return `<b>${ds.label}</b>: ${nearest.y.toFixed(1)} dB`;
+  }).filter(s => s !== '');
+  overlay.innerHTML = `<span>Freq: ${fftCrosshairDataX.toFixed(4)} Hz</span>&nbsp;&nbsp;${parts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`;
+  overlay.classList.remove('hidden');
+}
+
+function handleFftCrosshairClick(e: MouseEvent): void {
+  if (!fftChartInstance) return;
+  const elements = fftChartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+  if (!elements.length) return;
+  const el = elements[0];
+  const pt = fftChartInstance.data.datasets[el.datasetIndex].data[el.index] as { x: number; y: number };
+  if (!pt) return;
+  fftCrosshairDataX = pt.x;
+  fftChartInstance.update('none');
+  updateFftYValues();
+}
+
+function getFftCanvasPixelX(e: MouseEvent): number {
+  const canvas = document.getElementById('fft-canvas') as HTMLCanvasElement;
+  return e.clientX - canvas.getBoundingClientRect().left;
+}
+
+function handleFftMouseDown(e: MouseEvent): void {
+  if (e.button === 2) {
+    fftIsPanDown = true;
+    fftPanLastPixel = getFftCanvasPixelX(e);
+    e.preventDefault(); return;
+  }
+  if (e.button !== 0) return;
+  fftIsMouseDown = true;
+  fftIsDragging = false;
+  fftMouseDownClientX = e.clientX;
+  fftDragStartPixel = getFftCanvasPixelX(e);
+  fftDragCurrentPixel = fftDragStartPixel;
+  e.preventDefault();
+}
+
+function handleFftMouseMove(e: MouseEvent): void {
+  if (fftIsPanDown && fftChartInstance) {
+    const currentPixel = getFftCanvasPixelX(e);
+    const delta = currentPixel - fftPanLastPixel;
+    if (delta !== 0) {
+      const scale = fftChartInstance.scales.x;
+      const currentMin = fftZoomXMin ?? scale.min;
+      const currentMax = fftZoomXMax ?? scale.max;
+      const chartWidth = fftChartInstance.chartArea.right - fftChartInstance.chartArea.left;
+      const dataDelta = -delta * (currentMax - currentMin) / chartWidth;
+      fftZoomXMin = currentMin + dataDelta;
+      fftZoomXMax = currentMax + dataDelta;
+      fftPanLastPixel = currentPixel;
+      redrawFFT();
+    }
+    return;
+  }
+  if (!fftIsMouseDown) return;
+  if (Math.abs(e.clientX - fftMouseDownClientX) > DRAG_THRESHOLD) {
+    fftIsDragging = true;
+    fftDragCurrentPixel = getFftCanvasPixelX(e);
+    if (fftChartInstance) fftChartInstance.update('none');
+  }
+}
+
+function handleFftMouseUp(e: MouseEvent): void {
+  if (e.button === 2) { fftIsPanDown = false; return; }
+  if (!fftIsMouseDown || e.button !== 0) return;
+  fftIsMouseDown = false;
+  if (fftIsDragging) {
+    fftIsDragging = false;
+    applyFftZoom();
+  } else {
+    handleFftCrosshairClick(e);
+  }
+}
+
+function handleFftWheel(e: WheelEvent): void {
+  if (!fftChartInstance) return;
+  e.preventDefault();
+  const scale = fftChartInstance.scales.x;
+  const currentMin = fftZoomXMin ?? scale.min;
+  const currentMax = fftZoomXMax ?? scale.max;
+  const mouseDataX = scale.getValueForPixel(getFftCanvasPixelX(e));
+  const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+  fftZoomXMin = mouseDataX - (mouseDataX - currentMin) * factor;
+  fftZoomXMax = mouseDataX + (currentMax - mouseDataX) * factor;
+  redrawFFT();
+}
+
+function handleFftDblClick(): void {
+  fftZoomXMin = null;
+  fftZoomXMax = null;
+  redrawFFT();
+}
+
+function applyFftZoom(): void {
+  if (!fftChartInstance) return;
+  const scale = fftChartInstance.scales.x;
+  const x1 = scale.getValueForPixel(fftDragStartPixel);
+  const x2 = scale.getValueForPixel(fftDragCurrentPixel);
+  const newMin = Math.min(x1, x2);
+  const newMax = Math.max(x1, x2);
+  if (newMax - newMin < 1e-10) return;
+  fftZoomXMin = newMin;
+  fftZoomXMax = newMax;
+  redrawFFT();
+}
+
+function initFftCanvasListener(): void {
+  if (fftCanvasListenerAdded) return;
+  fftCanvasListenerAdded = true;
+  const canvas = document.getElementById('fft-canvas')!;
+  canvas.addEventListener('mousedown', handleFftMouseDown);
+  canvas.addEventListener('mousemove', handleFftMouseMove);
+  canvas.addEventListener('mouseup', handleFftMouseUp);
+  canvas.addEventListener('dblclick', handleFftDblClick);
+  canvas.addEventListener('wheel', handleFftWheel, { passive: false });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+function redrawFFT(): void {
+  if (fftChartInstance) { fftChartInstance.destroy(); fftChartInstance = null; }
+  const fftCanvas = document.getElementById('fft-canvas') as HTMLCanvasElement;
+  if (!fftCanvas || lastFftDatasets.length === 0) return;
+  const datasets = lastFftDatasets.map(ds => ({
+    ...ds,
+    borderWidth: lineWidth,
+    pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
+  }));
+  fftChartInstance = new Chart(fftCanvas.getContext('2d')!, {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: lastFftDatasets.length > 1, labels: { filter: (item: any) => item.text !== '' } },
+        tooltip: { enabled: false },
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          title: { display: true, text: 'Frequency [Hz]' },
+          grid: { color: 'rgba(128,128,128,0.3)' },
+          ...(fftZoomXMin !== null ? { min: fftZoomXMin, max: fftZoomXMax! } : {}),
+        },
+        y: {
+          title: { display: true, text: 'Amplitude [dB]' },
+          grid: { color: 'rgba(128,128,128,0.3)' },
+        },
+      },
+    },
+    plugins: [fftDragSelectPlugin, fftCrosshairPlugin],
+  });
+  updateFftYValues();
 }
 
 export function resetZoom(): void {
@@ -451,11 +673,96 @@ export function updateViewport(startRow: number, endRow: number): void {
 export function setLineWidth(width: number): void {
   lineWidth = width;
   if (lastCols.length > 0) redraw();
+  if (lastFftDatasets.length > 0) redrawFFT();
 }
 
 export function setMarkerStyle(style: string): void {
   markerStyle = style;
   if (lastCols.length > 0) redraw();
+  if (lastFftDatasets.length > 0) redrawFFT();
+}
+
+export function closeFFTPane(): void {
+  if (fftChartInstance) { fftChartInstance.destroy(); fftChartInstance = null; }
+  fftZoomXMin = null;
+  fftZoomXMax = null;
+  fftCrosshairDataX = null;
+  lastFftDatasets = [];
+  const wrapper = document.getElementById('fft-canvas-wrapper');
+  if (wrapper) { wrapper.classList.add('hidden'); wrapper.style.height = ''; }
+  document.getElementById('fft-divider')?.classList.add('hidden');
+  document.getElementById('fft-yvalues')?.classList.add('hidden');
+}
+
+export function renderFFTPane(
+  headers: string[], rows: string[][], fftColList: number[], xAxisCol: number
+): void {
+  if (fftColList.length === 0) { closeFFTPane(); return; }
+
+  // Determine sample rate from x-axis column values
+  let sampleRate = 1;
+  if (rows.length >= 2) {
+    const xVals = rows.map(r => parseFloat(r[xAxisCol])).filter(v => isFinite(v));
+    if (xVals.length >= 2) {
+      const dt = (xVals[xVals.length - 1] - xVals[0]) / (xVals.length - 1);
+      if (dt > 0) sampleRate = 1 / dt;
+    }
+  }
+
+  const datasets: any[] = [];
+  const MAX_PTS = 2000;
+  fftColList.forEach((colIdx, ci) => {
+    const signal = rows.map(r => parseFloat(r[colIdx]));
+    const { freqs, amplitudesDb } = computeFFT(signal, sampleRate);
+    if (freqs.length === 0) return;
+
+    let pts = freqs.map((f, i) => ({ x: f, y: amplitudesDb[i] }));
+    if (pts.length > MAX_PTS) {
+      const step = Math.ceil(pts.length / MAX_PTS);
+      pts = pts.filter((_, i) => i % step === 0);
+    }
+
+    const color = PALETTE[ci % PALETTE.length];
+    datasets.push({
+      label: headers[colIdx],
+      data: pts,
+      tension: 0,
+      fill: false,
+      borderWidth: lineWidth,
+      borderColor: color,
+      backgroundColor: color,
+      pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
+      showLine: true,
+    });
+  });
+
+  if (datasets.length === 0) { closeFFTPane(); return; }
+
+  const fftWrapper = document.getElementById('fft-canvas-wrapper')!;
+  const fftDivider = document.getElementById('fft-divider')!;
+  const wasHidden = fftWrapper.classList.contains('hidden');
+  fftWrapper.classList.remove('hidden');
+  fftDivider.classList.remove('hidden');
+  if (wasHidden) {
+    fftWrapper.style.height = '50%';
+    fftCrosshairDataX = null;
+    document.getElementById('fft-yvalues')?.classList.add('hidden');
+  }
+
+  lastFftDatasets = datasets;
+  redrawFFT();
+  initFftCanvasListener();
+}
+
+export function renderFFTPaneFromGraph(): void {
+  const dataCols = getDataCols();
+  if (dataCols.length === 0) return;
+  renderFFTPane(lastHeaders, lastRows, dataCols, lastXAxisCol);
+}
+
+export function isFFTPaneVisible(): boolean {
+  const w = document.getElementById('fft-canvas-wrapper');
+  return !!w && !w.classList.contains('hidden');
 }
 
 export function closeGraph(): void {
@@ -463,5 +770,6 @@ export function closeGraph(): void {
   crosshairOrigRowIdx = null;
   updateYValues();
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  closeFFTPane();
   document.getElementById('graph-container')!.classList.add('hidden');
 }
