@@ -2,7 +2,7 @@
   "name": "tabledataview",
   "displayName": "TableDataView",
   "description": "View CSV/TSV/DAT files as interactive tables with graph support",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "reingel",
   "repository": {
     "type": "git",

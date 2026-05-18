@@ -569,11 +569,10 @@ export function renderGraph(
 }
 
 function computeYRange(datasets: any[]): { min: number; max: number } | null {
-  if (zoomXMin === null || zoomXMax === null) return null;
   let min = Infinity, max = -Infinity;
   for (const ds of datasets) {
     for (const pt of ds.data as DataPoint[]) {
-      if (pt.x >= zoomXMin! && pt.x <= zoomXMax!) {
+      if (zoomXMin === null || (pt.x >= zoomXMin! && pt.x <= zoomXMax!)) {
         if (pt.y < min) min = pt.y;
         if (pt.y > max) max = pt.y;
       }
@@ -619,7 +618,7 @@ function redraw(): void {
         y: {
           title: { display: true, text: 'Value' },
           grid: { color: 'rgba(128,128,128,0.3)' },
-          ...(yRange ? { min: yRange.min, max: yRange.max } : { suggestedMin: 0 }),
+          ...(yRange ? { min: yRange.min, max: yRange.max } : {}),
         },
       },
     },
