@@ -11,6 +11,8 @@ let lineWidth: number = 1;
 let markerStyle: string = 'none';
 let crosshairDataX: number | null = null;
 let crosshairOrigRowIdx: number | null = null;
+let crosshair2DataX: number | null = null;
+let crosshair2OrigRowIdx: number | null = null;
 let lastHeaders: string[] = [];
 let lastRows: string[][] = [];
 let lastCols: number[] = [];
@@ -31,6 +33,8 @@ let dragStartPixel = 0;
 let dragCurrentPixel = 0;
 let isPanDown = false;
 let panLastPixel = 0;
+let panStartClientX = 0;
+let panIsDragging = false;
 
 let lastFftDatasets: any[] = [];
 let fftCrosshairDataX: number | null = null;
@@ -162,19 +166,35 @@ const viewportPlugin = {
 const crosshairPlugin = {
   id: 'crosshairLine',
   afterDraw(chart: any) {
-    if (crosshairDataX === null || !chart.scales.x) return;
-    const pixelX = chart.scales.x.getPixelForValue(crosshairDataX);
+    if (!chart.scales.x) return;
     const { top, bottom, left, right } = chart.chartArea;
-    if (pixelX < left || pixelX > right) return;
     const ctx = chart.ctx;
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(pixelX, top);
-    ctx.lineTo(pixelX, bottom);
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.restore();
+    if (crosshairDataX !== null) {
+      const pixelX = chart.scales.x.getPixelForValue(crosshairDataX);
+      if (pixelX >= left && pixelX <= right) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(pixelX, top);
+        ctx.lineTo(pixelX, bottom);
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    if (crosshair2DataX !== null) {
+      const pixelX = chart.scales.x.getPixelForValue(crosshair2DataX);
+      if (pixelX >= left && pixelX <= right) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(pixelX, top);
+        ctx.lineTo(pixelX, bottom);
+        ctx.strokeStyle = 'rgba(255,200,50,0.9)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
   },
 };
 
@@ -220,18 +240,65 @@ function getDataCols(): number[] {
   return filtered.length > 0 ? filtered : [lastXAxisCol];
 }
 
+function formatNum(val: number): string {
+  if (!isFinite(val)) return 'N/A';
+  if (val === 0) return '0';
+  const abs = Math.abs(val);
+  if (abs >= 1e6 || (abs > 0 && abs < 1e-3)) return val.toExponential(4);
+  return parseFloat(val.toPrecision(6)).toString();
+}
+
 function updateYValues(): void {
   const overlay = document.getElementById('graph-yvalues')!;
-  if (crosshairOrigRowIdx === null) { overlay.classList.add('hidden'); return; }
-  const row = lastRows[crosshairOrigRowIdx];
+  if (crosshairOrigRowIdx === null && crosshair2OrigRowIdx === null) {
+    overlay.classList.add('hidden');
+    document.getElementById('btn-hide-crosshair')?.classList.add('hidden');
+    return;
+  }
   const useColAsX = lastCols.includes(lastXAxisCol);
-  const xLabel = useColAsX
-    ? `${lastHeaders[lastXAxisCol]}=${row[lastXAxisCol]}`
-    : `Row ${crosshairOrigRowIdx + 1}`;
-  const parts = getDataCols().map(c => `<b>${lastHeaders[c]}</b>: ${row[c]}`);
-  overlay.innerHTML = `<span>${xLabel}</span>&nbsp;&nbsp;${parts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`;
+  const dataCols = getDataCols();
+  let html = '';
+
+  if (crosshairOrigRowIdx !== null) {
+    const row1 = lastRows[crosshairOrigRowIdx];
+    const xLabel1 = useColAsX
+      ? `${lastHeaders[lastXAxisCol]}=${row1[lastXAxisCol]}`
+      : `Row ${crosshairOrigRowIdx + 1}`;
+    const parts1 = dataCols.map(c => `<b>${lastHeaders[c]}</b>: ${row1[c]}`);
+    html += `<div><span>${xLabel1}</span>&nbsp;&nbsp;${parts1.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}</div>`;
+  }
+
+  if (crosshair2OrigRowIdx !== null) {
+    const row2 = lastRows[crosshair2OrigRowIdx];
+    const xLabel2 = useColAsX
+      ? `${lastHeaders[lastXAxisCol]}=${row2[lastXAxisCol]}`
+      : `Row ${crosshair2OrigRowIdx + 1}`;
+    const parts2 = dataCols.map(c => `<b>${lastHeaders[c]}</b>: ${row2[c]}`);
+    html += `<div><span>${xLabel2}</span>&nbsp;&nbsp;${parts2.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}</div>`;
+  }
+
+  if (crosshairOrigRowIdx !== null && crosshair2OrigRowIdx !== null) {
+    const row1 = lastRows[crosshairOrigRowIdx];
+    const row2 = lastRows[crosshair2OrigRowIdx];
+    let dxLabel: string;
+    if (useColAsX) {
+      const dx = parseFloat(row2[lastXAxisCol]) - parseFloat(row1[lastXAxisCol]);
+      dxLabel = `Δ${lastHeaders[lastXAxisCol]}=${formatNum(dx)}`;
+    } else {
+      dxLabel = `ΔRow=${crosshair2OrigRowIdx - crosshairOrigRowIdx}`;
+    }
+    const dParts = dataCols.map(c => {
+      const diff = parseFloat(row2[c]) - parseFloat(row1[c]);
+      return `<b>Δ${lastHeaders[c]}</b>: ${formatNum(diff)}`;
+    });
+    html += `<div><span>${dxLabel}</span>&nbsp;&nbsp;${dParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}</div>`;
+  }
+
+  overlay.innerHTML = html;
   overlay.classList.remove('hidden');
+  document.getElementById('btn-hide-crosshair')?.classList.remove('hidden');
 }
+
 
 function getCanvasPixelX(e: MouseEvent): number {
   const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
@@ -239,9 +306,12 @@ function getCanvasPixelX(e: MouseEvent): number {
 }
 
 function handleMouseDown(e: MouseEvent): void {
-  if (e.button === 2) {
+  const isCtrlCmd = e.ctrlKey || e.metaKey;
+  if (e.button === 2 || (e.button === 0 && isCtrlCmd)) {
     isPanDown = true;
     panLastPixel = getCanvasPixelX(e);
+    panStartClientX = e.clientX;
+    panIsDragging = false;
     e.preventDefault();
     return;
   }
@@ -257,18 +327,23 @@ function handleMouseDown(e: MouseEvent): void {
 function handleMouseMove(e: MouseEvent): void {
   if (isPanDown && chartInstance) {
     const currentPixel = getCanvasPixelX(e);
-    const delta = currentPixel - panLastPixel;
-    if (delta !== 0) {
-      const scale = chartInstance.scales.x;
-      const currentMin = zoomXMin ?? scale.min;
-      const currentMax = zoomXMax ?? scale.max;
-      const chartWidth = chartInstance.chartArea.right - chartInstance.chartArea.left;
-      const dataDelta = -delta * (currentMax - currentMin) / chartWidth;
-      zoomXMin = currentMin + dataDelta;
-      zoomXMax = currentMax + dataDelta;
-      panLastPixel = currentPixel;
-      redraw();
+    if (!panIsDragging && Math.abs(e.clientX - panStartClientX) > DRAG_THRESHOLD) {
+      panIsDragging = true;
     }
+    if (panIsDragging) {
+      const delta = currentPixel - panLastPixel;
+      if (delta !== 0) {
+        const scale = chartInstance.scales.x;
+        const currentMin = zoomXMin ?? scale.min;
+        const currentMax = zoomXMax ?? scale.max;
+        const chartWidth = chartInstance.chartArea.right - chartInstance.chartArea.left;
+        const dataDelta = -delta * (currentMax - currentMin) / chartWidth;
+        zoomXMin = currentMin + dataDelta;
+        zoomXMax = currentMax + dataDelta;
+        redraw();
+      }
+    }
+    panLastPixel = currentPixel;
     return;
   }
   if (!isMouseDown) return;
@@ -280,8 +355,19 @@ function handleMouseMove(e: MouseEvent): void {
 }
 
 function handleMouseUp(e: MouseEvent): void {
-  if (e.button === 2) { isPanDown = false; return; }
-  if (!isMouseDown || e.button !== 0) return;
+  const isCtrlCmd = e.ctrlKey || e.metaKey;
+  if (e.button === 2 || (e.button === 0 && isCtrlCmd)) {
+    if (e.button === 2 && isPanDown && !panIsDragging) {
+      handleCrosshair2Click(e);
+    }
+    isPanDown = false;
+    panIsDragging = false;
+    return;
+  }
+  if (e.button !== 0) return;
+  isPanDown = false;
+  panIsDragging = false;
+  if (!isMouseDown) return;
   isMouseDown = false;
   if (isDragging) {
     isDragging = false;
@@ -335,6 +421,19 @@ function handleCrosshairClick(e: MouseEvent): void {
   chartInstance.update('none');
   updateYValues();
   if (rowHighlightCallback) rowHighlightCallback(pt.rowIdx);
+}
+
+function handleCrosshair2Click(e: MouseEvent): void {
+  if (!chartInstance) return;
+  const elements = chartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+  if (!elements.length) return;
+  const el = elements[0];
+  const pt = chartInstance.data.datasets[el.datasetIndex].data[el.index] as DataPoint;
+  if (!pt) return;
+  crosshair2DataX = pt.x;
+  crosshair2OrigRowIdx = pt.rowIdx;
+  chartInstance.update('none');
+  updateYValues();
 }
 
 function initCanvasListener(): void {
@@ -543,6 +642,22 @@ export function resetZoom(): void {
   zoomXMax = null;
 }
 
+export function resetCrosshairs(): void {
+  crosshairDataX = null;
+  crosshairOrigRowIdx = null;
+  crosshair2DataX = null;
+  crosshair2OrigRowIdx = null;
+}
+
+export function hideCrosshairs(): void {
+  crosshairDataX = null;
+  crosshairOrigRowIdx = null;
+  crosshair2DataX = null;
+  crosshair2OrigRowIdx = null;
+  if (chartInstance) chartInstance.update('none');
+  updateYValues();
+}
+
 export function renderGraph(
   headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0,
   rightData?: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number }
@@ -557,8 +672,6 @@ export function renderGraph(
   lastCols = selectedCols;
   lastXAxisCol = xAxisCol;
   lastRightData = rightData;
-  crosshairDataX = null;
-  crosshairOrigRowIdx = null;
 
   displayRows = rows;
   rowIndexMap = rows.map((_, i) => i);
@@ -767,6 +880,8 @@ export function isFFTPaneVisible(): boolean {
 export function closeGraph(): void {
   crosshairDataX = null;
   crosshairOrigRowIdx = null;
+  crosshair2DataX = null;
+  crosshair2OrigRowIdx = null;
   updateYValues();
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
   closeFFTPane();

@@ -384,6 +384,7 @@ export class CompareViewProvider {
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
       <span id="graph-title">Graph</span>
+      <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width
         <select id="sel-line-width" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
