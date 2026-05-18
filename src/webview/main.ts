@@ -2,7 +2,7 @@ import { ExtensionToWebviewMessage, ParsedFile } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, resetZoom, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -74,6 +74,7 @@ function handleShowGraph(): void {
   const selected = getSelected();
   if (selected.length === 0) return;
   resetZoom();
+  resetCrosshairs();
   renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
   syncViewport();
 }
@@ -246,6 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
     saveReloadState();
     vscode.postMessage({ type: 'reload' });
   });
+  document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
     setCrosshairRow(null, []);

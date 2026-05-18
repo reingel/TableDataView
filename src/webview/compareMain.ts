@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { renderGraph, resetZoom, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
 const vscode = acquireVsCodeApi();
@@ -903,6 +903,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-show-graph')!.addEventListener('click', () => {
     if (!leftData || !rightData) return;
     resetZoom();
+    resetCrosshairs();
     renderGraph(
       leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
       { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right }
@@ -916,6 +917,7 @@ document.addEventListener('DOMContentLoaded', () => {
     vscode.postMessage({ type: 'reload' });
   });
 
+  document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
     crosshairRowIdx = null;

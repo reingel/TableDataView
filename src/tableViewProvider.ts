@@ -353,6 +353,7 @@ export class TableViewProvider {
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
       <span id="graph-title">Graph</span>
+      <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
       <button id="btn-show-fft">Show FFT</button>
       <div style="width:16px;flex-shrink:0;"></div>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
