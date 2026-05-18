@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, goHome } from './graphRenderer';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
 const vscode = acquireVsCodeApi();
@@ -917,6 +917,7 @@ document.addEventListener('DOMContentLoaded', () => {
     vscode.postMessage({ type: 'reload' });
   });
 
+  document.getElementById('btn-home')!.addEventListener('click', goHome);
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();

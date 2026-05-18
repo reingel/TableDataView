@@ -35,6 +35,8 @@ let isPanDown = false;
 let panLastPixel = 0;
 let panStartClientX = 0;
 let panIsDragging = false;
+let crosshairClickTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingClickEvent: MouseEvent | null = null;
 
 let lastFftDatasets: any[] = [];
 let fftCrosshairDataX: number | null = null;
@@ -373,7 +375,12 @@ function handleMouseUp(e: MouseEvent): void {
     isDragging = false;
     applyZoom();
   } else {
-    handleCrosshairClick(e);
+    if (crosshairClickTimer !== null) clearTimeout(crosshairClickTimer);
+    pendingClickEvent = e;
+    crosshairClickTimer = setTimeout(() => {
+      crosshairClickTimer = null;
+      if (pendingClickEvent) { handleCrosshairClick(pendingClickEvent); pendingClickEvent = null; }
+    }, 150);
   }
 }
 
@@ -390,11 +397,6 @@ function handleWheel(e: WheelEvent): void {
   redraw();
 }
 
-function handleDblClick(): void {
-  zoomXMin = null;
-  zoomXMax = null;
-  redraw();
-}
 
 function applyZoom(): void {
   if (!chartInstance) return;
@@ -443,7 +445,6 @@ function initCanvasListener(): void {
   canvas.addEventListener('mousedown', handleMouseDown);
   canvas.addEventListener('mousemove', handleMouseMove);
   canvas.addEventListener('mouseup', handleMouseUp);
-  canvas.addEventListener('dblclick', handleDblClick);
   canvas.addEventListener('wheel', handleWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
@@ -693,9 +694,47 @@ function computeYRange(datasets: any[]): { min: number; max: number } | null {
   }
   if (min === Infinity) return null;
   const pad = (max - min) * 0.05 || 1;
-  const yMin = (min >= 0 && min - pad < 0) ? 0 : min - pad;
-  return { min: yMin, max: max + pad };
+  return { min: min - pad, max: max + pad };
 }
+
+function computeXRange(datasets: any[]): { min: number; max: number } | null {
+  let min = Infinity, max = -Infinity;
+  for (const ds of datasets) {
+    for (const pt of ds.data as { x: number; y: number }[]) {
+      if (pt.x < min) min = pt.x;
+      if (pt.x > max) max = pt.x;
+    }
+  }
+  if (min === Infinity) return null;
+  return { min, max };
+}
+
+const zeroLinePlugin = {
+  id: 'zeroLines',
+  afterDraw(chart: any) {
+    const { chartArea, ctx, scales } = chart;
+    if (!scales.y) return;
+    const { left, right, top, bottom } = chartArea;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(180,180,180,0.55)';
+    ctx.lineWidth = 1;
+    if (scales.y.min <= 0 && scales.y.max >= 0) {
+      const pixelY = scales.y.getPixelForValue(0);
+      ctx.beginPath();
+      ctx.moveTo(left, pixelY);
+      ctx.lineTo(right, pixelY);
+      ctx.stroke();
+    }
+    if (scales.x && scales.x.min <= 0 && scales.x.max >= 0) {
+      const pixelX = scales.x.getPixelForValue(0);
+      ctx.beginPath();
+      ctx.moveTo(pixelX, top);
+      ctx.lineTo(pixelX, bottom);
+      ctx.stroke();
+    }
+    ctx.restore();
+  },
+};
 
 function redraw(): void {
   const useColAsX = lastCols.includes(lastXAxisCol);
@@ -703,6 +742,7 @@ function redraw(): void {
   const dataCols = getDataCols();
   const datasets = buildDatasets();
   const yRange = computeYRange(datasets);
+  const xRange = zoomXMin === null ? computeXRange(datasets) : null;
 
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
@@ -726,19 +766,34 @@ function redraw(): void {
           type: 'linear',
           title: { display: true, text: xLabel },
           grid: { color: 'rgba(128,128,128,0.3)' },
-          ...(zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : {}),
+          ticks: { includeBounds: false },
+          ...(zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : xRange ? { min: xRange.min, max: xRange.max } : {}),
         },
         y: {
           title: { display: true, text: 'Value' },
           grid: { color: 'rgba(128,128,128,0.3)' },
+          ticks: { includeBounds: false },
           ...(yRange ? { min: yRange.min, max: yRange.max } : {}),
         },
       },
     },
-    plugins: [viewportPlugin, crosshairPlugin, dragSelectPlugin],
+    plugins: [viewportPlugin, zeroLinePlugin, crosshairPlugin, dragSelectPlugin],
   });
 
   updateYValues();
+  updateHomeButton();
+}
+
+function updateHomeButton(): void {
+  const btn = document.getElementById('btn-home');
+  if (!btn) return;
+  btn.classList.toggle('hidden', zoomXMin === null);
+}
+
+export function goHome(): void {
+  zoomXMin = null;
+  zoomXMax = null;
+  redraw();
 }
 
 export function updateViewport(startRow: number, endRow: number): void {
