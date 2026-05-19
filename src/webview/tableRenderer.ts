@@ -8,6 +8,11 @@ let currentData: ParsedFile | null = null;
 let crosshairRowIdx: number | null = null;
 let crosshairColIdxs: number[] = [];
 let renderPending = false;
+let rowClickCallback: ((rowIdx: number) => void) | null = null;
+
+export function setRowClickCallback(cb: (rowIdx: number) => void): void {
+  rowClickCallback = cb;
+}
 const diffCols = new Set<number>();
 const movAvgCols = new Map<number, number>(); // col -> window size
 
@@ -269,6 +274,7 @@ function renderBody(): void {
     const row = currentData.rows[i];
     const tr = document.createElement('tr');
     tr.dataset.rowIndex = String(i);
+    tr.addEventListener('click', () => { if (rowClickCallback) rowClickCallback(i); });
 
     const tdNum = document.createElement('td');
     tdNum.textContent = String(i + 1);

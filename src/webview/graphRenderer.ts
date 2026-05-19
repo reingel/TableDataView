@@ -55,6 +55,21 @@ export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
 }
 
+export function setCrosshairToRow(rowIdx: number): void {
+  if (!chartInstance || lastRows.length === 0) return;
+  const useColAsX = lastCols.includes(lastXAxisCol);
+  const dispIdx = rowIndexMap.indexOf(rowIdx);
+  const idx = dispIdx >= 0 ? dispIdx : rowIdx;
+  const xVal = useColAsX
+    ? parseFloat(displayRows[idx]?.[lastXAxisCol])
+    : (rowIndexMap[idx] ?? rowIdx);
+  if (!isFinite(xVal)) return;
+  crosshairDataX = xVal;
+  crosshairOrigRowIdx = rowIdx;
+  chartInstance.update('none');
+  updateYValues();
+}
+
 type DataPoint = { x: number; y: number; rowIdx: number };
 
 function buildSegments(rows: string[][], xAxisCol: number, colIdx: number, useColAsX: boolean, indexMap: number[]): DataPoint[][] {
@@ -445,6 +460,7 @@ function initCanvasListener(): void {
   canvas.addEventListener('mousedown', handleMouseDown);
   canvas.addEventListener('mousemove', handleMouseMove);
   canvas.addEventListener('mouseup', handleMouseUp);
+  canvas.addEventListener('dblclick', () => { if (crosshairClickTimer !== null) { clearTimeout(crosshairClickTimer); crosshairClickTimer = null; pendingClickEvent = null; } goHome(); });
   canvas.addEventListener('wheel', handleWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
@@ -781,13 +797,6 @@ function redraw(): void {
   });
 
   updateYValues();
-  updateHomeButton();
-}
-
-function updateHomeButton(): void {
-  const btn = document.getElementById('btn-home');
-  if (!btn) return;
-  btn.classList.toggle('hidden', zoomXMin === null);
 }
 
 export function goHome(): void {

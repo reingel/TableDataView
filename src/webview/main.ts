@@ -1,8 +1,8 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane, goHome } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -185,6 +185,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   setRowHighlightCallback(highlightTableRow);
+  setRowClickCallback((rowIdx) => {
+    setCrosshairRow(rowIdx, getSelected());
+    const graphContainer = document.getElementById('graph-container')!;
+    if (!graphContainer.classList.contains('hidden')) setCrosshairToRow(rowIdx);
+  });
 
   const graphContainer = document.getElementById('graph-container')!;
   document.getElementById('graph-resize-handle')!.addEventListener('mousedown', e => {
@@ -247,7 +252,6 @@ document.addEventListener('DOMContentLoaded', () => {
     saveReloadState();
     vscode.postMessage({ type: 'reload' });
   });
-  document.getElementById('btn-home')!.addEventListener('click', goHome);
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
