@@ -1,8 +1,8 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane, goHome } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -54,6 +54,21 @@ function updateToolbar(): void {
     renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
     if (isFFTPaneVisible()) renderFFTPaneFromGraph();
   }
+}
+
+function navigateToRow(rowIdx: number): void {
+  setCrosshairRow(rowIdx, getSelected());
+  scrollToRow(rowIdx);
+  const gc = document.getElementById('graph-container')!;
+  if (!gc.classList.contains('hidden')) setCrosshairToRow(rowIdx);
+}
+
+function getEffectiveValue(rowIdx: number, colIdx: number): string {
+  if (!currentData) return '';
+  if (isDiff(colIdx)) return getDiffValue(rowIdx, colIdx);
+  const ws = getMovAvgWindowSize(colIdx);
+  if (ws !== undefined) return getMovAvgValue(rowIdx, colIdx, ws);
+  return currentData.rows[rowIdx][colIdx];
 }
 
 function getEffectiveRows(): string[][] {
@@ -182,9 +197,43 @@ document.addEventListener('DOMContentLoaded', () => {
     showDiff: (col) => { setDiff(col); updateToolbar(); },
     showOriginal: (col) => { clearDiff(col); clearMovAvg(col); updateToolbar(); },
     showMovAvg: (col, windowSize) => { setMovAvg(col, windowSize); updateToolbar(); },
+    findNextChange: (col, startRow) => {
+      if (!currentData || startRow < 0) return;
+      const n = currentData.rows.length;
+      const refVal = getEffectiveValue(startRow, col);
+      for (let i = startRow + 1; i < n; i++) {
+        if (getEffectiveValue(i, col) !== refVal) {
+          navigateToRow(i);
+          return;
+        }
+      }
+    },
+    gotoMax: (col) => {
+      if (!currentData) return;
+      let maxVal = -Infinity, maxRow = -1;
+      for (let i = 0; i < currentData.rows.length; i++) {
+        const v = parseFloat(getEffectiveValue(i, col));
+        if (isFinite(v) && v > maxVal) { maxVal = v; maxRow = i; }
+      }
+      if (maxRow >= 0) navigateToRow(maxRow);
+    },
+    gotoMin: (col) => {
+      if (!currentData) return;
+      let minVal = Infinity, minRow = -1;
+      for (let i = 0; i < currentData.rows.length; i++) {
+        const v = parseFloat(getEffectiveValue(i, col));
+        if (isFinite(v) && v < minVal) { minVal = v; minRow = i; }
+      }
+      if (minRow >= 0) navigateToRow(minRow);
+    },
   });
 
   setRowHighlightCallback(highlightTableRow);
+  setRowClickCallback((rowIdx) => {
+    setCrosshairRow(rowIdx, getSelected());
+    const graphContainer = document.getElementById('graph-container')!;
+    if (!graphContainer.classList.contains('hidden')) setCrosshairToRow(rowIdx);
+  });
 
   const graphContainer = document.getElementById('graph-container')!;
   document.getElementById('graph-resize-handle')!.addEventListener('mousedown', e => {
@@ -247,7 +296,6 @@ document.addEventListener('DOMContentLoaded', () => {
     saveReloadState();
     vscode.postMessage({ type: 'reload' });
   });
-  document.getElementById('btn-home')!.addEventListener('click', goHome);
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
@@ -277,7 +325,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const target = e.target as HTMLElement;
     const colIndexStr = target.closest<HTMLElement>('[data-col-index]')?.dataset.colIndex;
     const colIndex = colIndexStr !== undefined ? parseInt(colIndexStr) : -1;
-    showContextMenu(e.clientX, e.clientY, colIndex, {
+    const rowIndexStr = target.closest<HTMLElement>('[data-row-index]')?.dataset.rowIndex;
+    const rowIndex = rowIndexStr !== undefined ? parseInt(rowIndexStr) : -1;
+    showContextMenu(e.clientX, e.clientY, colIndex, rowIndex, {
       isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
       isDiff: colIndex >= 0 && isDiff(colIndex),
       movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,

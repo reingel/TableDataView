@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, updateViewport, goHome } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, updateViewport } from './graphRenderer';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
 const vscode = acquireVsCodeApi();
@@ -146,6 +146,48 @@ function buildColumnMapping(leftHeaders: string[], rightHeaders: string[]): void
 
 // ---- Toolbar ----
 
+function formatNum(val: number): string {
+  if (!isFinite(val)) return 'N/A';
+  if (val === 0) return '0';
+  const abs = Math.abs(val);
+  if (abs >= 1e6 || (abs > 0 && abs < 1e-3)) return val.toExponential(4);
+  return parseFloat(val.toPrecision(6)).toString();
+}
+
+function buildDiffStatsHtml(): string {
+  if (!leftData || !rightData) return '';
+  const leftCols = Array.from(selectedCols.left);
+  const useColAsX = leftCols.includes(xAxisCol.left);
+  const dataCols = useColAsX ? leftCols.filter(c => c !== xAxisCol.left) : leftCols;
+  if (dataCols.length === 0) return '';
+
+  const parts: string[] = [];
+  for (const li of dataCols) {
+    const ri = columnMapping.get(li);
+    if (ri === undefined) continue;
+    let maxAbsDiff = -1;
+    let maxRow = -1;
+    for (let i = 0; i < displayRowCount; i++) {
+      const lv = parseFloat(getCellValue('left', i, li));
+      const rv = parseFloat(getCellValue('right', i, ri));
+      if (!isFinite(lv) || !isFinite(rv)) continue;
+      const d = Math.abs(lv - rv);
+      if (d > maxAbsDiff) { maxAbsDiff = d; maxRow = i; }
+    }
+    if (maxRow < 0) continue;
+    const colName = leftData.headers[li];
+    let atStr: string;
+    if (useColAsX) {
+      const xVal = parseFloat(getCellValue('left', maxRow, xAxisCol.left));
+      atStr = `${leftData.headers[xAxisCol.left]}=${formatNum(xVal)}`;
+    } else {
+      atStr = `Row ${maxRow + 1}`;
+    }
+    parts.push(`<b>${colName}</b>: max|L−R|=${formatNum(maxAbsDiff)} at ${atStr}`);
+  }
+  return parts.join('&nbsp;&nbsp;|&nbsp;&nbsp;');
+}
+
 function updateToolbar(): void {
   const hasLeft = selectedCols.left.size > 0;
   const hasRight = selectedCols.right.size > 0;
@@ -256,6 +298,7 @@ function renderBody(side: Side): void {
     const row = data.rows[i];
     const tr = document.createElement('tr');
     tr.dataset.rowIndex = String(i);
+    tr.addEventListener('click', () => navigateToRow(i));
 
     const tdNum = document.createElement('td');
     tdNum.textContent = String(i + 1);
@@ -469,6 +512,15 @@ function resetXAxis(side: Side): void {
   updateToolbar();
 }
 
+function navigateToRow(rowIdx: number): void {
+  crosshairRowIdx = rowIdx;
+  applyRowHighlight('left');
+  applyRowHighlight('right');
+  scrollToRow(rowIdx);
+  const graphContainer = document.getElementById('graph-container')!;
+  if (!graphContainer.classList.contains('hidden')) setCrosshairToRow(rowIdx);
+}
+
 function gotoNextDiff(side: Side, colIdx: number): void {
   const otherCol = getMappedCol(side, colIdx);
   if (otherCol === undefined) return;
@@ -478,10 +530,7 @@ function gotoNextDiff(side: Side, colIdx: number): void {
     const to = pass === 0 ? displayRowCount : (crosshairRowIdx ?? 0);
     for (let i = from; i < to; i++) {
       if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
-        crosshairRowIdx = i;
-        applyRowHighlight('left');
-        applyRowHighlight('right');
-        scrollToRow(i);
+        navigateToRow(i);
         return;
       }
     }
@@ -497,14 +546,27 @@ function gotoPrevDiff(side: Side, colIdx: number): void {
     const to = pass === 0 ? -1 : (crosshairRowIdx ?? displayRowCount);
     for (let i = from; i > to; i--) {
       if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
-        crosshairRowIdx = i;
-        applyRowHighlight('left');
-        applyRowHighlight('right');
-        scrollToRow(i);
+        navigateToRow(i);
         return;
       }
     }
   }
+}
+
+function gotoMaxDiff(side: Side, colIdx: number): void {
+  const otherCol = getMappedCol(side, colIdx);
+  if (otherCol === undefined) return;
+  let maxDiff = -1;
+  let maxRow = -1;
+  for (let i = 0; i < displayRowCount; i++) {
+    const lv = parseFloat(getCellValue(side, i, colIdx));
+    const rv = parseFloat(getCellValue(otherSide(side), i, otherCol));
+    if (!isFinite(lv) || !isFinite(rv)) continue;
+    const d = Math.abs(lv - rv);
+    if (d > maxDiff) { maxDiff = d; maxRow = i; }
+  }
+  if (maxRow < 0) return;
+  navigateToRow(maxRow);
 }
 
 function saveCompareReloadState(): void {
@@ -698,6 +760,10 @@ function initContextMenu(): void {
     menuEl.classList.add('hidden');
     if (ctxColIdx >= 0) gotoPrevDiff(ctxSide, ctxColIdx);
   });
+  document.getElementById('ctx-goto-max-diff')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) gotoMaxDiff(ctxSide, ctxColIdx);
+  });
   [10, 30, 100, 1000].forEach(n => {
     document.getElementById(`ctx-show-movavg-${n}`)!.addEventListener('click', () => {
       menuEl.classList.add('hidden');
@@ -731,9 +797,11 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-show-movavg-1000', colIndex >= 0 && !isDiff && movAvgWin !== 1000);
   setItemVisible('ctx-show-original', colIndex >= 0 && isTransformed);
   const hasDiffCol = colIndex >= 0 && diffColumnSet[side].has(colIndex);
-  setItemVisible('ctx-diff-sep', hasDiffCol);
+  const hasMappedCol = colIndex >= 0 && getMappedCol(side, colIndex) !== undefined;
   setItemVisible('ctx-goto-next-diff', hasDiffCol);
   setItemVisible('ctx-goto-prev-diff', hasDiffCol);
+  setItemVisible('ctx-goto-max-diff', hasMappedCol);
+  setItemVisible('ctx-diff-sep', (hasDiffCol || hasMappedCol) && colIndex >= 0);
 
   const menuEl = document.getElementById('context-menu')!;
   menuEl.style.left = `${x}px`;
@@ -800,6 +868,7 @@ document.addEventListener('DOMContentLoaded', () => {
     applyRowHighlight('right');
     scrollToRow(rowIdx);
   });
+  setExtraYValuesCallback(buildDiffStatsHtml);
 
   // Scroll sync
   const leftPane = document.getElementById('left-pane')!;
@@ -917,7 +986,6 @@ document.addEventListener('DOMContentLoaded', () => {
     vscode.postMessage({ type: 'reload' });
   });
 
-  document.getElementById('btn-home')!.addEventListener('click', goHome);
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();

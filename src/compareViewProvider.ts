@@ -366,6 +366,10 @@ export class CompareViewProvider {
 
   <div id="context-menu" class="hidden">
     <ul>
+      <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
+      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
+      <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
+      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
       <li id="ctx-show-diff">Show numerical differences</li>
@@ -374,9 +378,6 @@ export class CompareViewProvider {
       <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
       <li id="ctx-show-movavg-1000">Show moving averages (n=1000)</li>
       <li id="ctx-show-original">Show original values</li>
-      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
-      <li id="ctx-goto-next-diff" class="hidden">Go to next different value</li>
-      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different value</li>
     </ul>
   </div>
 
@@ -384,7 +385,6 @@ export class CompareViewProvider {
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
       <span id="graph-title">Graph</span>
-      <button id="btn-home" class="hidden" style="margin-left:8px;">Home</button>
       <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width

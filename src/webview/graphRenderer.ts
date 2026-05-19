@@ -55,6 +55,26 @@ export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
 }
 
+let extraYValuesCallback: (() => string) | null = null;
+export function setExtraYValuesCallback(fn: (() => string) | null): void {
+  extraYValuesCallback = fn;
+}
+
+export function setCrosshairToRow(rowIdx: number): void {
+  if (!chartInstance || lastRows.length === 0) return;
+  const useColAsX = lastCols.includes(lastXAxisCol);
+  const dispIdx = rowIndexMap.indexOf(rowIdx);
+  const idx = dispIdx >= 0 ? dispIdx : rowIdx;
+  const xVal = useColAsX
+    ? parseFloat(displayRows[idx]?.[lastXAxisCol])
+    : (rowIndexMap[idx] ?? rowIdx);
+  if (!isFinite(xVal)) return;
+  crosshairDataX = xVal;
+  crosshairOrigRowIdx = rowIdx;
+  chartInstance.update('none');
+  updateYValues();
+}
+
 type DataPoint = { x: number; y: number; rowIdx: number };
 
 function buildSegments(rows: string[][], xAxisCol: number, colIdx: number, useColAsX: boolean, indexMap: number[]): DataPoint[][] {
@@ -250,53 +270,90 @@ function formatNum(val: number): string {
   return parseFloat(val.toPrecision(6)).toString();
 }
 
+function getRightDataCols(): number[] {
+  if (!lastRightData) return [];
+  const rd = lastRightData;
+  if (!rd.selectedCols.includes(rd.xAxisCol)) return rd.selectedCols;
+  const filtered = rd.selectedCols.filter(c => c !== rd.xAxisCol);
+  return filtered.length > 0 ? filtered : [rd.xAxisCol];
+}
+
 function updateYValues(): void {
   const overlay = document.getElementById('graph-yvalues')!;
+  const SEP = '&nbsp;&nbsp;&nbsp;&#124;&#124;&nbsp;&nbsp;&nbsp;';
+  const extra = extraYValuesCallback ? extraYValuesCallback() : '';
   if (crosshairOrigRowIdx === null && crosshair2OrigRowIdx === null) {
-    overlay.classList.add('hidden');
-    document.getElementById('btn-hide-crosshair')?.classList.add('hidden');
+    if (!extra) {
+      overlay.classList.add('hidden');
+      document.getElementById('btn-hide-crosshair')?.classList.add('hidden');
+      return;
+    }
+    overlay.innerHTML = extra;
+    overlay.classList.remove('hidden');
     return;
   }
   const useColAsX = lastCols.includes(lastXAxisCol);
   const dataCols = getDataCols();
-  let html = '';
+  const rd = lastRightData;
+  const rightCols = getRightDataCols();
+  const sections: string[] = [];
 
   if (crosshairOrigRowIdx !== null) {
-    const row1 = lastRows[crosshairOrigRowIdx];
+    const row1L = lastRows[crosshairOrigRowIdx];
+    const row1R = rd?.rows[crosshairOrigRowIdx];
     const xLabel1 = useColAsX
-      ? `${lastHeaders[lastXAxisCol]}=${row1[lastXAxisCol]}`
+      ? `${lastHeaders[lastXAxisCol]}=${row1L[lastXAxisCol]}`
       : `Row ${crosshairOrigRowIdx + 1}`;
-    const parts1 = dataCols.map(c => `<b>${lastHeaders[c]}</b>: ${row1[c]}`);
-    html += `<div><span>${xLabel1}</span>&nbsp;&nbsp;${parts1.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}</div>`;
+    const parts1 = dataCols.map((c, i) => {
+      const lv = row1L[c];
+      if (!rd || !row1R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
+      const rc = rightCols[i];
+      const rv = rc !== undefined ? row1R[rc] : '–';
+      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;/&nbsp;${rv}`;
+    });
+    sections.push(`<span>${xLabel1}</span>&nbsp;&nbsp;${parts1.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
   }
 
   if (crosshair2OrigRowIdx !== null) {
-    const row2 = lastRows[crosshair2OrigRowIdx];
+    const row2L = lastRows[crosshair2OrigRowIdx];
+    const row2R = rd?.rows[crosshair2OrigRowIdx];
     const xLabel2 = useColAsX
-      ? `${lastHeaders[lastXAxisCol]}=${row2[lastXAxisCol]}`
+      ? `${lastHeaders[lastXAxisCol]}=${row2L[lastXAxisCol]}`
       : `Row ${crosshair2OrigRowIdx + 1}`;
-    const parts2 = dataCols.map(c => `<b>${lastHeaders[c]}</b>: ${row2[c]}`);
-    html += `<div><span>${xLabel2}</span>&nbsp;&nbsp;${parts2.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}</div>`;
+    const parts2 = dataCols.map((c, i) => {
+      const lv = row2L[c];
+      if (!rd || !row2R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
+      const rc = rightCols[i];
+      const rv = rc !== undefined ? row2R[rc] : '–';
+      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;/&nbsp;${rv}`;
+    });
+    sections.push(`<span>${xLabel2}</span>&nbsp;&nbsp;${parts2.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
   }
 
   if (crosshairOrigRowIdx !== null && crosshair2OrigRowIdx !== null) {
-    const row1 = lastRows[crosshairOrigRowIdx];
-    const row2 = lastRows[crosshair2OrigRowIdx];
+    const row1L = lastRows[crosshairOrigRowIdx];
+    const row2L = lastRows[crosshair2OrigRowIdx];
+    const row1R = rd?.rows[crosshairOrigRowIdx];
+    const row2R = rd?.rows[crosshair2OrigRowIdx];
     let dxLabel: string;
     if (useColAsX) {
-      const dx = parseFloat(row2[lastXAxisCol]) - parseFloat(row1[lastXAxisCol]);
+      const dx = parseFloat(row2L[lastXAxisCol]) - parseFloat(row1L[lastXAxisCol]);
       dxLabel = `Δ${lastHeaders[lastXAxisCol]}=${formatNum(dx)}`;
     } else {
       dxLabel = `ΔRow=${crosshair2OrigRowIdx - crosshairOrigRowIdx}`;
     }
-    const dParts = dataCols.map(c => {
-      const diff = parseFloat(row2[c]) - parseFloat(row1[c]);
-      return `<b>Δ${lastHeaders[c]}</b>: ${formatNum(diff)}`;
+    const dParts = dataCols.map((c, i) => {
+      const diffL = parseFloat(row2L[c]) - parseFloat(row1L[c]);
+      if (!rd || !row1R || !row2R) return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}`;
+      const rc = rightCols[i];
+      const diffR = rc !== undefined ? parseFloat(row2R[rc]) - parseFloat(row1R[rc]) : NaN;
+      return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}&nbsp;/&nbsp;${formatNum(diffR)}`;
     });
-    html += `<div><span>${dxLabel}</span>&nbsp;&nbsp;${dParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}</div>`;
+    sections.push(`<span>${dxLabel}</span>&nbsp;&nbsp;${dParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
   }
 
-  overlay.innerHTML = html;
+  if (extra) sections.push(extra);
+  overlay.innerHTML = sections.join(SEP);
   overlay.classList.remove('hidden');
   document.getElementById('btn-hide-crosshair')?.classList.remove('hidden');
 }
@@ -445,6 +502,7 @@ function initCanvasListener(): void {
   canvas.addEventListener('mousedown', handleMouseDown);
   canvas.addEventListener('mousemove', handleMouseMove);
   canvas.addEventListener('mouseup', handleMouseUp);
+  canvas.addEventListener('dblclick', () => { if (crosshairClickTimer !== null) { clearTimeout(crosshairClickTimer); crosshairClickTimer = null; pendingClickEvent = null; } goHome(); });
   canvas.addEventListener('wheel', handleWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
@@ -781,13 +839,6 @@ function redraw(): void {
   });
 
   updateYValues();
-  updateHomeButton();
-}
-
-function updateHomeButton(): void {
-  const btn = document.getElementById('btn-home');
-  if (!btn) return;
-  btn.classList.toggle('hidden', zoomXMin === null);
 }
 
 export function goHome(): void {
