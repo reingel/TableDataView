@@ -338,6 +338,10 @@ export class TableViewProvider {
 
   <div id="context-menu" class="hidden">
     <ul>
+      <li id="ctx-find-next-change" class="hidden">Find next change</li>
+      <li id="ctx-goto-max" class="hidden">Go to max. value</li>
+      <li id="ctx-goto-min" class="hidden">Go to min. value</li>
+      <li id="ctx-find-change-sep" class="ctx-separator hidden"></li>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
       <li id="ctx-show-diff">Show numerical differences</li>
