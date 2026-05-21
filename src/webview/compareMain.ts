@@ -322,7 +322,6 @@ function renderBody(side: Side): void {
       }
       const otherCol = side === 'left' ? columnMapping.get(j) : reverseMapping.get(j);
       if (otherCol !== undefined) {
-        if (diffColumnSet[side].has(j)) extraCls += ' col-has-diff';
         const otherVal = getCellValue(otherSide(side), i, otherCol);
         if (displayVal !== otherVal) extraCls += ' value-diff';
       }
@@ -820,11 +819,15 @@ window.addEventListener('message', (event: MessageEvent) => {
     displayRowCount = Math.min(leftData.rows.length, rightData.rows.length);
     buildColumnMapping(leftData.headers, rightData.headers);
 
-    document.getElementById('left-file-name')!.textContent = leftData.fileName;
-    document.getElementById('right-file-name')!.textContent = rightData.fileName;
-
-    const delimInfo = `delimiters: ${fmtDelim(leftData.delimiter)} / ${fmtDelim(rightData.delimiter)}`;
-    document.getElementById('delimiter-info')!.textContent = delimInfo;
+    const lPath = leftData.filePath ?? leftData.fileName;
+    const rPath = rightData.filePath ?? rightData.fileName;
+    const sep = lPath.includes('/') ? '/' : '\\';
+    const lParts = lPath.split(sep);
+    const rParts = rPath.split(sep);
+    let common = 0;
+    while (common < lParts.length - 1 && common < rParts.length - 1 && lParts[common] === rParts[common]) common++;
+    document.getElementById('left-file-name')!.textContent = lParts.slice(common).join(sep);
+    document.getElementById('right-file-name')!.textContent = rParts.slice(common).join(sep);
 
     const maxRows = Math.max(leftData.rows.length, rightData.rows.length);
     if (leftData.truncated || rightData.truncated || leftData.rows.length !== rightData.rows.length) {
@@ -847,11 +850,6 @@ window.addEventListener('message', (event: MessageEvent) => {
   }
 });
 
-function fmtDelim(d: string): string {
-  if (d === '\t') return 'tab';
-  if (d === ' ') return 'space';
-  return `'${d}'`;
-}
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

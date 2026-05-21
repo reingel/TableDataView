@@ -118,7 +118,6 @@ export class CompareViewProvider {
     }
     .file-name { font-weight: bold; margin-right: 2px; }
     .compare-sep { color: var(--vscode-descriptionForeground); margin: 0 2px; }
-    #delimiter-info { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-right: 8px; }
     #truncate-notice {
       color: var(--vscode-notificationsWarningIcon-foreground, orange);
       font-size: 0.85em;
@@ -304,7 +303,7 @@ export class CompareViewProvider {
       background: var(--vscode-titleBar-activeBackground, #333);
       flex-shrink: 0;
     }
-    #graph-title { flex: 1; font-weight: bold; }
+    #graph-yvalues { flex: 1; font-size: 0.8em; white-space: nowrap; overflow-x: auto; min-width: 0; }
     #graph-resize-handle {
       height: 5px;
       cursor: ns-resize;
@@ -312,26 +311,11 @@ export class CompareViewProvider {
       flex-shrink: 0;
     }
     #graph-resize-handle:hover { background: var(--vscode-focusBorder, #007acc); }
-    #graph-yvalues {
-      padding: 2px 8px;
-      font-size: 0.8em;
-      white-space: nowrap;
-      overflow-x: auto;
-      flex-shrink: 0;
-      line-height: 20px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
     #chart-canvas { flex: 1; min-height: 0; cursor: crosshair; }
   </style>
 </head>
 <body>
   <div id="toolbar">
-    <span id="left-file-name" class="file-name"></span>
-    <span class="compare-sep">↔</span>
-    <span id="right-file-name" class="file-name"></span>
-    <span id="delimiter-info"></span>
-    <span id="truncate-notice" class="hidden"></span>
-    <div class="toolbar-sep"></div>
     <button id="btn-top">Top</button>
     <button id="btn-bottom">Bottom</button>
     <button id="btn-left">Left</button>
@@ -339,6 +323,11 @@ export class CompareViewProvider {
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
+    <div class="toolbar-sep"></div>
+    <span id="left-file-name" class="file-name"></span>
+    <span class="compare-sep">↔</span>
+    <span id="right-file-name" class="file-name"></span>
+    <span id="truncate-notice" class="hidden"></span>
     <button id="btn-reload" style="margin-left:auto;">Reload</button>
   </div>
 
@@ -366,10 +355,6 @@ export class CompareViewProvider {
 
   <div id="context-menu" class="hidden">
     <ul>
-      <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
-      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
-      <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
-      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
       <li id="ctx-show-diff">Show numerical differences</li>
@@ -378,13 +363,17 @@ export class CompareViewProvider {
       <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
       <li id="ctx-show-movavg-1000">Show moving averages (n=1000)</li>
       <li id="ctx-show-original">Show original values</li>
+      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
+      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
+      <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
     </ul>
   </div>
 
   <div id="graph-container" class="hidden">
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
-      <span id="graph-title">Graph</span>
+      <div id="graph-yvalues"></div>
       <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width

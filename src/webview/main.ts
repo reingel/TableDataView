@@ -101,8 +101,6 @@ window.addEventListener('message', (event: MessageEvent) => {
     currentData = msg.payload;
 
     document.getElementById('file-name')!.textContent = msg.payload.fileName;
-    document.getElementById('delimiter-info')!.textContent =
-      `delimiter: ${msg.payload.delimiter === '\t' ? 'tab' : msg.payload.delimiter === ' ' ? 'space' : `'${msg.payload.delimiter}'`}`;
 
     if (msg.payload.truncated) {
       document.getElementById('truncate-notice')!.textContent =

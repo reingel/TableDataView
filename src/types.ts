@@ -1,5 +1,6 @@
 export interface ParsedFile {
   fileName: string;
+  filePath: string;
   headers: string[];
   rows: string[][];
   hasHeader: boolean;

@@ -282,14 +282,10 @@ function updateYValues(): void {
   const overlay = document.getElementById('graph-yvalues')!;
   const SEP = '&nbsp;&nbsp;&nbsp;&#124;&#124;&nbsp;&nbsp;&nbsp;';
   const extra = extraYValuesCallback ? extraYValuesCallback() : '';
+  overlay.classList.remove('hidden');
   if (crosshairOrigRowIdx === null && crosshair2OrigRowIdx === null) {
-    if (!extra) {
-      overlay.classList.add('hidden');
-      document.getElementById('btn-hide-crosshair')?.classList.add('hidden');
-      return;
-    }
     overlay.innerHTML = extra;
-    overlay.classList.remove('hidden');
+    updateHideCrosshairButton();
     return;
   }
   const useColAsX = lastCols.includes(lastXAxisCol);
@@ -309,7 +305,7 @@ function updateYValues(): void {
       if (!rd || !row1R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
       const rc = rightCols[i];
       const rv = rc !== undefined ? row1R[rc] : '–';
-      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;/&nbsp;${rv}`;
+      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;↔&nbsp;${rv}`;
     });
     sections.push(`<span>${xLabel1}</span>&nbsp;&nbsp;${parts1.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
   }
@@ -325,7 +321,7 @@ function updateYValues(): void {
       if (!rd || !row2R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
       const rc = rightCols[i];
       const rv = rc !== undefined ? row2R[rc] : '–';
-      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;/&nbsp;${rv}`;
+      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;↔&nbsp;${rv}`;
     });
     sections.push(`<span>${xLabel2}</span>&nbsp;&nbsp;${parts2.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
   }
@@ -347,7 +343,7 @@ function updateYValues(): void {
       if (!rd || !row1R || !row2R) return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}`;
       const rc = rightCols[i];
       const diffR = rc !== undefined ? parseFloat(row2R[rc]) - parseFloat(row1R[rc]) : NaN;
-      return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}&nbsp;/&nbsp;${formatNum(diffR)}`;
+      return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}&nbsp;↔&nbsp;${formatNum(diffR)}`;
     });
     sections.push(`<span>${dxLabel}</span>&nbsp;&nbsp;${dParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
   }
@@ -355,7 +351,7 @@ function updateYValues(): void {
   if (extra) sections.push(extra);
   overlay.innerHTML = sections.join(SEP);
   overlay.classList.remove('hidden');
-  document.getElementById('btn-hide-crosshair')?.classList.remove('hidden');
+  updateHideCrosshairButton();
 }
 
 
@@ -526,11 +522,17 @@ const fftCrosshairPlugin = {
   },
 };
 
+function updateHideCrosshairButton(): void {
+  const hasCrosshair = crosshairOrigRowIdx !== null || crosshair2OrigRowIdx !== null || fftCrosshairDataX !== null;
+  document.getElementById('btn-hide-crosshair')?.classList.toggle('hidden', !hasCrosshair);
+}
+
 function updateFftYValues(): void {
   const overlay = document.getElementById('fft-yvalues');
   if (!overlay) return;
   if (fftCrosshairDataX === null || lastFftDatasets.length === 0) {
     overlay.classList.add('hidden');
+    updateHideCrosshairButton();
     return;
   }
   const parts = lastFftDatasets.map(ds => {
@@ -543,6 +545,7 @@ function updateFftYValues(): void {
   }).filter(s => s !== '');
   overlay.innerHTML = `<span>Freq: ${fftCrosshairDataX.toFixed(4)} Hz</span>&nbsp;&nbsp;${parts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`;
   overlay.classList.remove('hidden');
+  updateHideCrosshairButton();
 }
 
 function handleFftCrosshairClick(e: MouseEvent): void {
@@ -714,6 +717,9 @@ export function hideCrosshairs(): void {
   crosshair2DataX = null;
   crosshair2OrigRowIdx = null;
   if (chartInstance) chartInstance.update('none');
+  fftCrosshairDataX = null;
+  if (fftChartInstance) fftChartInstance.update('none');
+  updateFftYValues();
   updateYValues();
 }
 
