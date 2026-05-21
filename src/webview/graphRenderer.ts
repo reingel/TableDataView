@@ -38,6 +38,8 @@ let panIsDragging = false;
 let crosshairClickTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingClickEvent: MouseEvent | null = null;
 
+let diffMode = false;
+
 let lastFftDatasets: any[] = [];
 let fftCrosshairDataX: number | null = null;
 let fftZoomXMin: number | null = null;
@@ -56,6 +58,11 @@ export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
 }
 
 let extraYValuesCallback: (() => string) | null = null;
+export function setGraphDiffMode(enabled: boolean): void {
+  diffMode = enabled;
+  redraw();
+}
+
 export function setExtraYValuesCallback(fn: (() => string) | null): void {
   extraYValuesCallback = fn;
 }
@@ -98,6 +105,39 @@ function buildDatasets(): any[] {
   const useColAsX = lastCols.includes(lastXAxisCol);
   const dataCols = getDataCols();
   const result: any[] = [];
+
+  if (diffMode && lastRightData) {
+    const rd = lastRightData;
+    const rightDataCols = getRightDataCols();
+    const nRows = Math.min(displayRows.length, rd.rows.length);
+
+    dataCols.forEach((leftCol, colorIdx) => {
+      const rc = rightDataCols[colorIdx];
+      if (rc === undefined) return;
+      const color = PALETTE[colorIdx % PALETTE.length];
+      const segments: DataPoint[][] = [];
+      let cur: DataPoint[] = [];
+      for (let i = 0; i < nRows; i++) {
+        const xVal = useColAsX ? parseFloat(displayRows[i][lastXAxisCol]) : rowIndexMap[i];
+        const lv = parseFloat(displayRows[i][leftCol]);
+        const rv = parseFloat(rd.rows[i][rc]);
+        if (isFinite(xVal) && isFinite(lv) && isFinite(rv)) {
+          cur.push({ x: xVal, y: lv - rv, rowIdx: rowIndexMap[i] });
+        } else if (cur.length > 0) { segments.push(cur); cur = []; }
+      }
+      if (cur.length > 0) segments.push(cur);
+      segments.forEach((seg, si) => {
+        result.push({
+          label: si === 0 ? `Δ${lastHeaders[leftCol]}` : '',
+          data: seg, tension: 0.1, fill: false,
+          borderWidth: lineWidth, borderColor: color, backgroundColor: color,
+          pointRadius: MARKER_RADIUS[markerStyle] ?? 0, showLine: true,
+        });
+      });
+    });
+    return result;
+  }
+
   const hasRight = lastRightData !== undefined;
   const labelPrefix = hasRight ? 'L: ' : '';
 
@@ -302,6 +342,11 @@ function updateYValues(): void {
       : `Row ${crosshairOrigRowIdx + 1}`;
     const parts1 = dataCols.map((c, i) => {
       const lv = row1L[c];
+      if (diffMode && rd && row1R) {
+        const rc = rightCols[i];
+        const diff = rc !== undefined ? parseFloat(lv) - parseFloat(row1R[rc]) : NaN;
+        return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${isFinite(diff) ? formatNum(diff) : '–'}`;
+      }
       if (!rd || !row1R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
       const rc = rightCols[i];
       const rv = rc !== undefined ? row1R[rc] : '–';
@@ -318,6 +363,11 @@ function updateYValues(): void {
       : `Row ${crosshair2OrigRowIdx + 1}`;
     const parts2 = dataCols.map((c, i) => {
       const lv = row2L[c];
+      if (diffMode && rd && row2R) {
+        const rc = rightCols[i];
+        const diff = rc !== undefined ? parseFloat(lv) - parseFloat(row2R[rc]) : NaN;
+        return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${isFinite(diff) ? formatNum(diff) : '–'}`;
+      }
       if (!rd || !row2R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
       const rc = rightCols[i];
       const rv = rc !== undefined ? row2R[rc] : '–';
@@ -340,6 +390,12 @@ function updateYValues(): void {
     }
     const dParts = dataCols.map((c, i) => {
       const diffL = parseFloat(row2L[c]) - parseFloat(row1L[c]);
+      if (diffMode && rd && row1R && row2R) {
+        const rc = rightCols[i];
+        const d1 = rc !== undefined ? parseFloat(row1L[c]) - parseFloat(row1R[rc]) : NaN;
+        const d2 = rc !== undefined ? parseFloat(row2L[c]) - parseFloat(row2R[rc]) : NaN;
+        return `<b>ΔΔ${lastHeaders[c]}</b>:&nbsp;${isFinite(d2 - d1) ? formatNum(d2 - d1) : '–'}`;
+      }
       if (!rd || !row1R || !row2R) return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}`;
       const rc = rightCols[i];
       const diffR = rc !== undefined ? parseFloat(row2R[rc]) - parseFloat(row1R[rc]) : NaN;
@@ -834,7 +890,7 @@ function redraw(): void {
           ...(zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : xRange ? { min: xRange.min, max: xRange.max } : {}),
         },
         y: {
-          title: { display: true, text: 'Value' },
+          title: { display: true, text: diffMode ? 'L − R' : 'Value' },
           grid: { color: 'rgba(128,128,128,0.3)' },
           ticks: { includeBounds: false },
           ...(yRange ? { min: yRange.min, max: yRange.max } : {}),
@@ -990,6 +1046,7 @@ export function isFFTPaneVisible(): boolean {
 }
 
 export function closeGraph(): void {
+  diffMode = false;
   crosshairDataX = null;
   crosshairOrigRowIdx = null;
   crosshair2DataX = null;

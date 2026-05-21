@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, updateViewport } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, updateViewport, setGraphDiffMode } from './graphRenderer';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
 const vscode = acquireVsCodeApi();
@@ -985,8 +985,19 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
+
+  const btnDiffGraph = document.getElementById('btn-show-diff-graph')!;
+  let diffGraphActive = false;
+  btnDiffGraph.addEventListener('click', () => {
+    diffGraphActive = !diffGraphActive;
+    setGraphDiffMode(diffGraphActive);
+    btnDiffGraph.textContent = diffGraphActive ? 'Show original' : 'Show difference';
+  });
+
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
+    diffGraphActive = false;
+    btnDiffGraph.textContent = 'Show difference';
     crosshairRowIdx = null;
     applyRowHighlight('left');
     applyRowHighlight('right');
