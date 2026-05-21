@@ -115,7 +115,6 @@ export class TableViewProvider {
       flex-wrap: wrap;
     }
     #file-name { font-weight: bold; margin-right: 4px; }
-    #delimiter-info { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-right: 8px; }
     #truncate-notice {
       color: var(--vscode-notificationsWarningIcon-foreground, orange);
       font-size: 0.85em;
@@ -255,6 +254,10 @@ export class TableViewProvider {
       font-size: 0.9em;
     }
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
+    .ctx-separator { height: 1px; background: var(--vscode-menu-border, #454545); margin: 4px 0; padding: 0; cursor: default; pointer-events: none; }
+    .ctx-separator:hover { background: var(--vscode-menu-border, #454545); }
+    #ctx-stats { cursor: default; color: var(--vscode-descriptionForeground, #888); font-size: 0.82em; white-space: nowrap; line-height: 1.6; }
+    #ctx-stats:hover { background: transparent; }
     th.x-axis {
       box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.35);
       color: var(--vscode-editor-foreground, var(--vscode-foreground));
@@ -268,6 +271,8 @@ export class TableViewProvider {
     td.diff-col { color: #7ec8a0; }
     th.movavg-col { color: #7ec8e8; }
     td.movavg-col { color: #7ec8e8; }
+    th.hex-col { color: #e8c87e; }
+    td.hex-col { color: #e8c87e; }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;
@@ -284,7 +289,7 @@ export class TableViewProvider {
       background: var(--vscode-titleBar-activeBackground, #333);
       flex-shrink: 0;
     }
-    #graph-title { flex: 1; font-weight: bold; }
+    #graph-yvalues { flex: 1; font-size: 0.8em; white-space: nowrap; overflow-x: auto; min-width: 0; }
     #graph-resize-handle {
       height: 5px;
       cursor: ns-resize;
@@ -292,15 +297,6 @@ export class TableViewProvider {
       flex-shrink: 0;
     }
     #graph-resize-handle:hover { background: var(--vscode-focusBorder, #007acc); }
-    #graph-yvalues {
-      padding: 2px 8px;
-      font-size: 0.8em;
-      white-space: nowrap;
-      overflow-x: auto;
-      flex-shrink: 0;
-      line-height: 20px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
     #chart-canvas-wrapper { flex: 1; min-height: 0; overflow: hidden; }
     #chart-canvas { width: 100%; height: 100%; cursor: crosshair; }
     #fft-divider { height: 4px; cursor: ns-resize; background: var(--vscode-panel-border); flex-shrink: 0; }
@@ -312,10 +308,6 @@ export class TableViewProvider {
 </head>
 <body>
   <div id="toolbar">
-    <span id="file-name"></span>
-    <span id="delimiter-info"></span>
-    <span id="truncate-notice" class="hidden"></span>
-    <div class="toolbar-sep"></div>
     <button id="btn-top">Top</button>
     <button id="btn-bottom">Bottom</button>
     <button id="btn-left">Left</button>
@@ -323,6 +315,9 @@ export class TableViewProvider {
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
+    <div class="toolbar-sep"></div>
+    <span id="file-name"></span>
+    <span id="truncate-notice" class="hidden"></span>
     <button id="btn-reload" style="margin-left:auto;">Reload</button>
   </div>
 
@@ -338,25 +333,28 @@ export class TableViewProvider {
 
   <div id="context-menu" class="hidden">
     <ul>
-      <li id="ctx-find-next-change" class="hidden">Find next change</li>
-      <li id="ctx-goto-max" class="hidden">Go to max. value</li>
-      <li id="ctx-goto-min" class="hidden">Go to min. value</li>
-      <li id="ctx-find-change-sep" class="ctx-separator hidden"></li>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
+      <li id="ctx-show-hex">Show in hex</li>
       <li id="ctx-show-diff">Show numerical differences</li>
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
       <li id="ctx-show-movavg-30">Show moving averages (n=30)</li>
       <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
       <li id="ctx-show-movavg-1000">Show moving averages (n=1000)</li>
       <li id="ctx-show-original">Show original values</li>
+      <li id="ctx-find-change-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-find-next-change" class="hidden">Find next change</li>
+      <li id="ctx-goto-max" class="hidden">Go to max. value</li>
+      <li id="ctx-goto-min" class="hidden">Go to min. value</li>
+      <li id="ctx-stats-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-stats" class="hidden"></li>
     </ul>
   </div>
 
   <div id="graph-container" class="hidden">
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
-      <span id="graph-title">Graph</span>
+      <div id="graph-yvalues"></div>
       <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
       <button id="btn-show-fft">Show FFT</button>
       <div style="width:16px;flex-shrink:0;"></div>
@@ -380,7 +378,6 @@ export class TableViewProvider {
       </label>
       <button id="btn-close-graph">&#x2715; Close</button>
     </div>
-    <div id="graph-yvalues" class="hidden"></div>
     <div id="chart-canvas-wrapper"><canvas id="chart-canvas"></canvas></div>
     <div id="fft-divider" class="hidden"></div>
     <div id="fft-yvalues" class="hidden"></div>

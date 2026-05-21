@@ -94,6 +94,7 @@ export function parseFile(content: string, filePath: string): ParsedFile {
   if (lines.length === 0) {
     return {
       fileName: path.basename(filePath),
+      filePath,
       headers: [],
       rows: [],
       hasHeader: false,
@@ -124,6 +125,7 @@ export function parseFile(content: string, filePath: string): ParsedFile {
 
   return {
     fileName: path.basename(filePath),
+    filePath,
     headers,
     rows: normalizedRows,
     hasHeader,

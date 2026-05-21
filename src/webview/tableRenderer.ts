@@ -15,6 +15,7 @@ export function setRowClickCallback(cb: (rowIdx: number) => void): void {
 }
 const diffCols = new Set<number>();
 const movAvgCols = new Map<number, number>(); // col -> window size
+const hexCols = new Set<number>();
 
 export function getData(): ParsedFile | null {
   return currentData;
@@ -26,6 +27,10 @@ export function getDiffColsSnapshot(): number[] {
 
 export function getMovAvgColsSnapshot(): Array<[number, number]> {
   return Array.from(movAvgCols.entries());
+}
+
+export function getHexColsSnapshot(): number[] {
+  return Array.from(hexCols);
 }
 
 export function getRowHeight(): number {
@@ -50,6 +55,40 @@ export function hasMovAvg(): boolean {
 
 export function getMovAvgWindowSize(col: number): number | undefined {
   return movAvgCols.get(col);
+}
+
+export function isHex(col: number): boolean {
+  return hexCols.has(col);
+}
+
+export function hasHex(): boolean {
+  return hexCols.size > 0;
+}
+
+export function setHex(col: number): void {
+  hexCols.add(col);
+  applyHexHeader(col);
+  scheduleRender();
+}
+
+export function clearHex(col: number): void {
+  hexCols.delete(col);
+  applyHexHeader(col);
+  scheduleRender();
+}
+
+export function clearAllHex(): void {
+  const cols = Array.from(hexCols);
+  hexCols.clear();
+  cols.forEach(col => applyHexHeader(col));
+  scheduleRender();
+}
+
+export function toHexDisplay(val: string): string {
+  const n = parseFloat(val);
+  if (!isFinite(n)) return val;
+  const int = Math.trunc(n);
+  return (int < 0 ? '-' : '') + '0x' + Math.abs(int).toString(16).toUpperCase();
 }
 
 export function setMovAvg(col: number, windowSize: number): void {
@@ -106,6 +145,13 @@ function applyMovAvgHeader(col: number): void {
   });
 }
 
+function applyHexHeader(col: number): void {
+  const isHexCol = hexCols.has(col);
+  document.querySelectorAll<HTMLElement>(`#col-index-row [data-col-index="${col}"], #header-row [data-col-index="${col}"]`).forEach(el => {
+    el.classList.toggle('hex-col', isHexCol);
+  });
+}
+
 export function setCrosshairRow(rowIdx: number | null, colIdxs: number[]): void {
   crosshairRowIdx = rowIdx;
   crosshairColIdxs = colIdxs;
@@ -151,6 +197,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   crosshairColIdxs = [];
   diffCols.clear();
   movAvgCols.clear();
+  hexCols.clear();
 
   initSelector(data.headers.length, onSelectionChange);
 
@@ -285,6 +332,7 @@ function renderBody(): void {
       const td = document.createElement('td');
       const inDiff = diffCols.has(j);
       const movAvgWin = movAvgCols.get(j);
+      const inHex = hexCols.has(j);
       let displayVal: string;
       let extraCls = '';
       if (inDiff) {
@@ -295,6 +343,10 @@ function renderBody(): void {
         extraCls = ' movavg-col';
       } else {
         displayVal = row[j];
+      }
+      if (inHex) {
+        displayVal = toHexDisplay(displayVal);
+        extraCls += ' hex-col';
       }
       td.textContent = displayVal;
       td.dataset.colIndex = String(j);

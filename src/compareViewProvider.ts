@@ -118,7 +118,6 @@ export class CompareViewProvider {
     }
     .file-name { font-weight: bold; margin-right: 2px; }
     .compare-sep { color: var(--vscode-descriptionForeground); margin: 0 2px; }
-    #delimiter-info { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-right: 8px; }
     #truncate-notice {
       color: var(--vscode-notificationsWarningIcon-foreground, orange);
       font-size: 0.85em;
@@ -272,6 +271,8 @@ export class CompareViewProvider {
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
     .ctx-separator { height: 1px; background: var(--vscode-menu-border, #454545); margin: 4px 0; padding: 0; cursor: default; pointer-events: none; }
     .ctx-separator:hover { background: var(--vscode-menu-border, #454545); }
+    #ctx-stats { cursor: default; color: var(--vscode-descriptionForeground, #888); font-size: 0.82em; white-space: nowrap; line-height: 1.6; }
+    #ctx-stats:hover { background: transparent; }
     th.x-axis {
       box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.35);
       color: var(--vscode-editor-foreground, var(--vscode-foreground));
@@ -285,6 +286,8 @@ export class CompareViewProvider {
     td.diff-col { color: #7ec8a0; }
     th.movavg-col { color: #7ec8e8; }
     td.movavg-col { color: #7ec8e8; }
+    th.hex-col { color: #e8c87e; }
+    td.hex-col { color: #e8c87e; }
     td.col-has-diff { background: rgba(200, 50, 50, 0.25) !important; }
     th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(200, 50, 50, 0.28); }
     td.value-diff { background: rgba(210, 180, 0, 0.65) !important; }
@@ -304,7 +307,7 @@ export class CompareViewProvider {
       background: var(--vscode-titleBar-activeBackground, #333);
       flex-shrink: 0;
     }
-    #graph-title { flex: 1; font-weight: bold; }
+    #graph-yvalues { flex: 1; font-size: 0.8em; white-space: nowrap; overflow-x: auto; min-width: 0; }
     #graph-resize-handle {
       height: 5px;
       cursor: ns-resize;
@@ -312,26 +315,11 @@ export class CompareViewProvider {
       flex-shrink: 0;
     }
     #graph-resize-handle:hover { background: var(--vscode-focusBorder, #007acc); }
-    #graph-yvalues {
-      padding: 2px 8px;
-      font-size: 0.8em;
-      white-space: nowrap;
-      overflow-x: auto;
-      flex-shrink: 0;
-      line-height: 20px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
     #chart-canvas { flex: 1; min-height: 0; cursor: crosshair; }
   </style>
 </head>
 <body>
   <div id="toolbar">
-    <span id="left-file-name" class="file-name"></span>
-    <span class="compare-sep">↔</span>
-    <span id="right-file-name" class="file-name"></span>
-    <span id="delimiter-info"></span>
-    <span id="truncate-notice" class="hidden"></span>
-    <div class="toolbar-sep"></div>
     <button id="btn-top">Top</button>
     <button id="btn-bottom">Bottom</button>
     <button id="btn-left">Left</button>
@@ -339,6 +327,11 @@ export class CompareViewProvider {
     <div class="toolbar-sep"></div>
     <button id="btn-show-graph" disabled>Show Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
+    <div class="toolbar-sep"></div>
+    <span id="left-file-name" class="file-name"></span>
+    <span class="compare-sep">↔</span>
+    <span id="right-file-name" class="file-name"></span>
+    <span id="truncate-notice" class="hidden"></span>
     <button id="btn-reload" style="margin-left:auto;">Reload</button>
   </div>
 
@@ -366,26 +359,38 @@ export class CompareViewProvider {
 
   <div id="context-menu" class="hidden">
     <ul>
-      <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
-      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
-      <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
-      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
+      <li id="ctx-show-hex">Show in hex</li>
       <li id="ctx-show-diff">Show numerical differences</li>
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
       <li id="ctx-show-movavg-30">Show moving averages (n=30)</li>
       <li id="ctx-show-movavg-100">Show moving averages (n=100)</li>
       <li id="ctx-show-movavg-1000">Show moving averages (n=1000)</li>
       <li id="ctx-show-original">Show original values</li>
+      <li id="ctx-diff-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
+      <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
+      <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
+      <li id="ctx-stats-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-stats" class="hidden"></li>
     </ul>
   </div>
 
   <div id="graph-container" class="hidden">
     <div id="graph-resize-handle"></div>
     <div id="graph-header">
-      <span id="graph-title">Graph</span>
+      <div id="graph-yvalues"></div>
       <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
+      <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
+        Select
+        <select id="sel-graph-mode" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
+          <option value="original">original</option>
+          <option value="L-R">L - R</option>
+          <option value="R-L">R - L</option>
+          <option value="|L-R|">|L - R|</option>
+        </select>
+      </label>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width
         <select id="sel-line-width" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
