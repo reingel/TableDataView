@@ -254,6 +254,10 @@ export class TableViewProvider {
       font-size: 0.9em;
     }
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
+    .ctx-separator { height: 1px; background: var(--vscode-menu-border, #454545); margin: 4px 0; padding: 0; cursor: default; pointer-events: none; }
+    .ctx-separator:hover { background: var(--vscode-menu-border, #454545); }
+    #ctx-stats { cursor: default; color: var(--vscode-descriptionForeground, #888); font-size: 0.82em; white-space: nowrap; line-height: 1.6; }
+    #ctx-stats:hover { background: transparent; }
     th.x-axis {
       box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.35);
       color: var(--vscode-editor-foreground, var(--vscode-foreground));
@@ -267,6 +271,8 @@ export class TableViewProvider {
     td.diff-col { color: #7ec8a0; }
     th.movavg-col { color: #7ec8e8; }
     td.movavg-col { color: #7ec8e8; }
+    th.hex-col { color: #e8c87e; }
+    td.hex-col { color: #e8c87e; }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;
@@ -329,6 +335,7 @@ export class TableViewProvider {
     <ul>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
+      <li id="ctx-show-hex">Show in hex</li>
       <li id="ctx-show-diff">Show numerical differences</li>
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
       <li id="ctx-show-movavg-30">Show moving averages (n=30)</li>
@@ -339,6 +346,8 @@ export class TableViewProvider {
       <li id="ctx-find-next-change" class="hidden">Find next change</li>
       <li id="ctx-goto-max" class="hidden">Go to max. value</li>
       <li id="ctx-goto-min" class="hidden">Go to min. value</li>
+      <li id="ctx-stats-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-stats" class="hidden"></li>
     </ul>
   </div>
 

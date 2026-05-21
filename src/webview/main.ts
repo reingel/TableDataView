@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
 import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
@@ -15,7 +15,7 @@ type ReloadState = {
   scrollTop: number; scrollLeft: number;
   headers: string[];
   selectedCols: number[]; xAxisCol: number;
-  diffCols: number[]; movAvgCols: Array<[number, number]>;
+  diffCols: number[]; movAvgCols: Array<[number, number]>; hexCols: number[];
 };
 let pendingReload: ReloadState | null = null;
 
@@ -26,7 +26,7 @@ function saveReloadState(): void {
     scrollTop: c.scrollTop, scrollLeft: c.scrollLeft,
     headers: currentData.headers.slice(),
     selectedCols: getSelected(), xAxisCol: getXAxisCol(),
-    diffCols: getDiffColsSnapshot(), movAvgCols: getMovAvgColsSnapshot(),
+    diffCols: getDiffColsSnapshot(), movAvgCols: getMovAvgColsSnapshot(), hexCols: getHexColsSnapshot(),
   };
 }
 
@@ -36,6 +36,7 @@ function restoreReloadState(headers: string[]): void {
   if (!s || s.headers.join('\0') !== headers.join('\0')) return;
   for (const col of s.diffCols) setDiff(col);
   for (const [col, ws] of s.movAvgCols) setMovAvg(col, ws);
+  for (const col of s.hexCols) setHex(col);
   restoreSelection(s.selectedCols, s.xAxisCol);
   requestAnimationFrame(() => {
     const c = document.getElementById('table-container')!;
@@ -47,7 +48,7 @@ function restoreReloadState(headers: string[]): void {
 function updateToolbar(): void {
   const selected = getSelected();
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
-  const hasCustomState = getXAxisCol() !== 0 || hasDiff() || hasMovAvg();
+  const hasCustomState = getXAxisCol() !== 0 || hasDiff() || hasMovAvg() || hasHex();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
@@ -188,13 +189,57 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
+function addDragScroll(container: HTMLElement): void {
+  container.addEventListener('mousedown', (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startScrollLeft = container.scrollLeft;
+    const startScrollTop = container.scrollTop;
+    let dragging = false;
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!dragging && Math.abs(dx) + Math.abs(dy) > 5) {
+        dragging = true;
+        container.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+      }
+      if (dragging) {
+        container.scrollLeft = startScrollLeft - dx;
+        container.scrollTop = startScrollTop - dy;
+      }
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (dragging) {
+        container.style.cursor = '';
+        document.body.style.userSelect = '';
+        const onClickCapture = (ev: MouseEvent) => {
+          ev.stopPropagation();
+          container.removeEventListener('click', onClickCapture, true);
+        };
+        container.addEventListener('click', onClickCapture, true);
+        setTimeout(() => container.removeEventListener('click', onClickCapture, true), 300);
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initContextMenu({
     resetXAxis: () => { resetXAxis(); updateToolbar(); },
     setXAxis: (col) => { setXAxisCol(col); updateToolbar(); },
     showDiff: (col) => { setDiff(col); updateToolbar(); },
-    showOriginal: (col) => { clearDiff(col); clearMovAvg(col); updateToolbar(); },
+    showOriginal: (col) => { clearDiff(col); clearMovAvg(col); clearHex(col); updateToolbar(); },
     showMovAvg: (col, windowSize) => { setMovAvg(col, windowSize); updateToolbar(); },
+    showHex: (col) => { setHex(col); updateToolbar(); },
     findNextChange: (col, startRow) => {
       if (!currentData || startRow < 0) return;
       const n = currentData.rows.length;
@@ -288,6 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resetXAxis();
     clearAllDiff();
     clearAllMovAvg();
+    clearAllHex();
     updateToolbar();
   });
   document.getElementById('btn-reload')!.addEventListener('click', () => {
@@ -316,6 +362,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setMarkerStyle((e.target as HTMLSelectElement).value);
   });
 
+  addDragScroll(document.getElementById('table-container')!);
+
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 
   document.getElementById('table-container')!.addEventListener('contextmenu', e => {
@@ -325,11 +373,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const colIndex = colIndexStr !== undefined ? parseInt(colIndexStr) : -1;
     const rowIndexStr = target.closest<HTMLElement>('[data-row-index]')?.dataset.rowIndex;
     const rowIndex = rowIndexStr !== undefined ? parseInt(rowIndexStr) : -1;
+    let colStats: { max: number; min: number; mean: number } | null = null;
+    if (colIndex >= 0 && currentData) {
+      let maxV = -Infinity, minV = Infinity, sum = 0, count = 0;
+      for (let i = 0; i < currentData.rows.length; i++) {
+        const v = parseFloat(getEffectiveValue(i, colIndex));
+        if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
+      }
+      if (count > 0) colStats = { max: maxV, min: minV, mean: sum / count };
+    }
     showContextMenu(e.clientX, e.clientY, colIndex, rowIndex, {
       isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
       isDiff: colIndex >= 0 && isDiff(colIndex),
       movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,
       xAxisIsDefault: getXAxisCol() === 0,
+      isHex: colIndex >= 0 && isHex(colIndex),
+      stats: colStats,
     });
   });
 

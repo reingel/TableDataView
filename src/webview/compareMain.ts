@@ -21,6 +21,7 @@ let reverseMapping = new Map<number, number>();
 // Transform state per side
 const diffCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 const movAvgCols: Record<Side, Map<number, number>> = { left: new Map(), right: new Map() };
+const hexCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 const xAxisCol: Record<Side, number> = { left: 0, right: 0 };
 const selectedCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 
@@ -49,6 +50,7 @@ type CompareReloadState = {
   xAxisL: number; xAxisR: number;
   diffL: number[]; diffR: number[];
   movAvgL: Array<[number, number]>; movAvgR: Array<[number, number]>;
+  hexL: number[]; hexR: number[];
 };
 let pendingReload: CompareReloadState | null = null;
 
@@ -196,7 +198,8 @@ function updateToolbar(): void {
   const hasCustomState =
     xAxisCol.left !== 0 || xAxisCol.right !== 0 ||
     diffCols.left.size > 0 || diffCols.right.size > 0 ||
-    movAvgCols.left.size > 0 || movAvgCols.right.size > 0;
+    movAvgCols.left.size > 0 || movAvgCols.right.size > 0 ||
+    hexCols.left.size > 0 || hexCols.right.size > 0;
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
 
   const graphContainer = document.getElementById('graph-container')!;
@@ -309,6 +312,7 @@ function renderBody(side: Side): void {
       const td = document.createElement('td');
       const inDiff = diffCols[side].has(j);
       const movAvgWin = movAvgCols[side].get(j);
+      const inHex = hexCols[side].has(j);
       let displayVal: string;
       let extraCls = '';
       if (inDiff) {
@@ -319,6 +323,10 @@ function renderBody(side: Side): void {
         extraCls = ' movavg-col';
       } else {
         displayVal = row[j];
+      }
+      if (inHex) {
+        displayVal = toHexDisplay(displayVal);
+        extraCls += ' hex-col';
       }
       const otherCol = side === 'left' ? columnMapping.get(j) : reverseMapping.get(j);
       if (otherCol !== undefined) {
@@ -418,6 +426,46 @@ function applyMovAvgHeader(side: Side, colIdx: number): void {
   });
 }
 
+function applyHexHeader(side: Side, colIdx: number): void {
+  const isHexCol = hexCols[side].has(colIdx);
+  document.querySelectorAll<HTMLElement>(`#${side}-col-index-row [data-col-index="${colIdx}"], #${side}-header-row [data-col-index="${colIdx}"]`).forEach(el => {
+    el.classList.toggle('hex-col', isHexCol);
+  });
+}
+
+function toHexDisplay(val: string): string {
+  const n = parseFloat(val);
+  if (!isFinite(n)) return val;
+  const int = Math.trunc(n);
+  return (int < 0 ? '-' : '') + '0x' + Math.abs(int).toString(16).toUpperCase();
+}
+
+function setHex(side: Side, colIdx: number): void {
+  hexCols[side].add(colIdx);
+  applyHexHeader(side, colIdx);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, colIdx);
+  if (mi !== undefined) {
+    hexCols[other].add(mi);
+    applyHexHeader(other, mi);
+  }
+  scheduleRender();
+  updateToolbar();
+}
+
+function clearHex(side: Side, colIdx: number): void {
+  hexCols[side].delete(colIdx);
+  applyHexHeader(side, colIdx);
+  const other = otherSide(side);
+  const mi = getMappedCol(side, colIdx);
+  if (mi !== undefined) {
+    hexCols[other].delete(mi);
+    applyHexHeader(other, mi);
+  }
+  scheduleRender();
+  updateToolbar();
+}
+
 function applyRowHighlight(side: Side): void {
   const tableId = `#${side}-data-body`;
   document.querySelectorAll(`${tableId} td.crosshair-row`).forEach(el => el.classList.remove('crosshair-row'));
@@ -469,15 +517,19 @@ function setMovAvg(side: Side, colIdx: number, windowSize: number): void {
 function clearTransform(side: Side, colIdx: number): void {
   diffCols[side].delete(colIdx);
   movAvgCols[side].delete(colIdx);
+  hexCols[side].delete(colIdx);
   applyDiffHeader(side, colIdx);
   applyMovAvgHeader(side, colIdx);
+  applyHexHeader(side, colIdx);
   const other = otherSide(side);
   const mi = getMappedCol(side, colIdx);
   if (mi !== undefined) {
     diffCols[other].delete(mi);
     movAvgCols[other].delete(mi);
+    hexCols[other].delete(mi);
     applyDiffHeader(other, mi);
     applyMovAvgHeader(other, mi);
+    applyHexHeader(other, mi);
   }
   scheduleRender();
   updateToolbar();
@@ -578,6 +630,7 @@ function saveCompareReloadState(): void {
     xAxisL: xAxisCol.left, xAxisR: xAxisCol.right,
     diffL: Array.from(diffCols.left), diffR: Array.from(diffCols.right),
     movAvgL: Array.from(movAvgCols.left.entries()), movAvgR: Array.from(movAvgCols.right.entries()),
+    hexL: Array.from(hexCols.left), hexR: Array.from(hexCols.right),
   };
 }
 
@@ -592,6 +645,8 @@ function restoreCompareReloadState(): void {
   for (const c of s.diffR) { diffCols.right.add(c); applyDiffHeader('right', c); }
   for (const [c, w] of s.movAvgL) { movAvgCols.left.set(c, w); applyMovAvgHeader('left', c); }
   for (const [c, w] of s.movAvgR) { movAvgCols.right.set(c, w); applyMovAvgHeader('right', c); }
+  for (const c of s.hexL) { hexCols.left.add(c); applyHexHeader('left', c); }
+  for (const c of s.hexR) { hexCols.right.add(c); applyHexHeader('right', c); }
   xAxisCol.left = s.xAxisL; xAxisCol.right = s.xAxisR;
   selectedCols.left = new Set(s.selectedL);
   selectedCols.right = new Set(s.selectedR);
@@ -611,10 +666,12 @@ function resetAll(): void {
   xAxisCol.left = 0; xAxisCol.right = 0;
   diffCols.left.clear(); diffCols.right.clear();
   movAvgCols.left.clear(); movAvgCols.right.clear();
+  hexCols.left.clear(); hexCols.right.clear();
   if (leftData) {
     for (let i = 0; i < leftData.headers.length; i++) {
       applyDiffHeader('left', i);
       applyMovAvgHeader('left', i);
+      applyHexHeader('left', i);
     }
     applyHighlight('left');
   }
@@ -622,6 +679,7 @@ function resetAll(): void {
     for (let i = 0; i < rightData.headers.length; i++) {
       applyDiffHeader('right', i);
       applyMovAvgHeader('right', i);
+      applyHexHeader('right', i);
     }
     applyHighlight('right');
   }
@@ -743,6 +801,10 @@ function initContextMenu(): void {
     menuEl.classList.add('hidden');
     if (ctxColIdx >= 0) setXAxis(ctxSide, ctxColIdx);
   });
+  document.getElementById('ctx-show-hex')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) setHex(ctxSide, ctxColIdx);
+  });
   document.getElementById('ctx-show-diff')!.addEventListener('click', () => {
     menuEl.classList.add('hidden');
     if (ctxColIdx >= 0) setDiff(ctxSide, ctxColIdx);
@@ -781,7 +843,8 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   const isXAxis = colIndex >= 0 && colIndex === xAxisCol[side];
   const isDiff = colIndex >= 0 && diffCols[side].has(colIndex);
   const movAvgWin = colIndex >= 0 ? movAvgCols[side].get(colIndex) : undefined;
-  const isTransformed = isDiff || movAvgWin !== undefined;
+  const isHexCol = colIndex >= 0 && hexCols[side].has(colIndex);
+  const isTransformed = isDiff || movAvgWin !== undefined || isHexCol;
   const xAxisIsDefault = xAxisCol[side] === 0;
 
   const setItemVisible = (id: string, visible: boolean) =>
@@ -789,11 +852,12 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
 
   setItemVisible('ctx-reset-xaxis', isXAxis && !xAxisIsDefault);
   setItemVisible('ctx-set-xaxis', colIndex >= 0 && !isXAxis);
+  setItemVisible('ctx-show-hex', colIndex >= 0 && !isHexCol);
   setItemVisible('ctx-show-diff', colIndex >= 0 && !isTransformed);
-  setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !isDiff && movAvgWin !== 10);
-  setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !isDiff && movAvgWin !== 30);
-  setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !isDiff && movAvgWin !== 100);
-  setItemVisible('ctx-show-movavg-1000', colIndex >= 0 && !isDiff && movAvgWin !== 1000);
+  setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 10);
+  setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 30);
+  setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 100);
+  setItemVisible('ctx-show-movavg-1000', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 1000);
   setItemVisible('ctx-show-original', colIndex >= 0 && isTransformed);
   const hasDiffCol = colIndex >= 0 && diffColumnSet[side].has(colIndex);
   const hasMappedCol = colIndex >= 0 && getMappedCol(side, colIndex) !== undefined;
@@ -801,6 +865,31 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-goto-prev-diff', hasDiffCol);
   setItemVisible('ctx-goto-max-diff', hasMappedCol);
   setItemVisible('ctx-diff-sep', (hasDiffCol || hasMappedCol) && colIndex >= 0);
+
+  const hasStats = colIndex >= 0;
+  setItemVisible('ctx-stats-sep', hasStats);
+  setItemVisible('ctx-stats', hasStats);
+  if (hasStats) {
+    let maxV = -Infinity, minV = Infinity, sum = 0, count = 0;
+    for (let i = 0; i < displayRowCount; i++) {
+      const v = parseFloat(getCellValue(side, i, colIndex));
+      if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
+    }
+    const fmt = (v: number) => {
+      if (!isFinite(v)) return 'N/A';
+      const abs = Math.abs(v);
+      if (abs === 0) return '0';
+      if (abs >= 1e6 || (abs > 0 && abs < 1e-3)) return v.toExponential(4);
+      return parseFloat(v.toPrecision(6)).toString();
+    };
+    const statsEl = document.getElementById('ctx-stats')!;
+    if (count > 0) {
+      statsEl.innerHTML =
+        `max: ${fmt(maxV)}<br>min: ${fmt(minV)}<br>max−min: ${fmt(maxV - minV)}<br>mean: ${fmt(sum / count)}`;
+    } else {
+      statsEl.innerHTML = '(no numeric data)';
+    }
+  }
 
   const menuEl = document.getElementById('context-menu')!;
   menuEl.style.left = `${x}px`;
@@ -855,6 +944,51 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// ---- Drag scroll ----
+
+function addDragScroll(container: HTMLElement): void {
+  container.addEventListener('mousedown', (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startScrollLeft = container.scrollLeft;
+    const startScrollTop = container.scrollTop;
+    let dragging = false;
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!dragging && Math.abs(dx) + Math.abs(dy) > 5) {
+        dragging = true;
+        container.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+      }
+      if (dragging) {
+        container.scrollLeft = startScrollLeft - dx;
+        container.scrollTop = startScrollTop - dy;
+      }
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (dragging) {
+        container.style.cursor = '';
+        document.body.style.userSelect = '';
+        const onClickCapture = (ev: MouseEvent) => {
+          ev.stopPropagation();
+          container.removeEventListener('click', onClickCapture, true);
+        };
+        container.addEventListener('click', onClickCapture, true);
+        setTimeout(() => container.removeEventListener('click', onClickCapture, true), 300);
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 // ---- DOMContentLoaded ----
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -871,6 +1005,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Scroll sync
   const leftPane = document.getElementById('left-pane')!;
   const rightPane = document.getElementById('right-pane')!;
+
+  addDragScroll(leftPane);
+  addDragScroll(rightPane);
 
   leftPane.addEventListener('scroll', () => {
     if (syncScrollFlag) return;
@@ -986,18 +1123,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
 
-  const btnDiffGraph = document.getElementById('btn-show-diff-graph')!;
-  let diffGraphActive = false;
-  btnDiffGraph.addEventListener('click', () => {
-    diffGraphActive = !diffGraphActive;
-    setGraphDiffMode(diffGraphActive);
-    btnDiffGraph.textContent = diffGraphActive ? 'Show original' : 'Show difference';
+  document.getElementById('sel-graph-mode')!.addEventListener('change', e => {
+    const mode = (e.target as HTMLSelectElement).value as 'original' | 'L-R' | 'R-L' | '|L-R|';
+    setGraphDiffMode(mode);
   });
 
   document.getElementById('btn-close-graph')!.addEventListener('click', () => {
     closeGraph();
-    diffGraphActive = false;
-    btnDiffGraph.textContent = 'Show difference';
+    (document.getElementById('sel-graph-mode') as HTMLSelectElement).value = 'original';
     crosshairRowIdx = null;
     applyRowHighlight('left');
     applyRowHighlight('right');

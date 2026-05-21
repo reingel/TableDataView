@@ -271,6 +271,8 @@ export class CompareViewProvider {
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
     .ctx-separator { height: 1px; background: var(--vscode-menu-border, #454545); margin: 4px 0; padding: 0; cursor: default; pointer-events: none; }
     .ctx-separator:hover { background: var(--vscode-menu-border, #454545); }
+    #ctx-stats { cursor: default; color: var(--vscode-descriptionForeground, #888); font-size: 0.82em; white-space: nowrap; line-height: 1.6; }
+    #ctx-stats:hover { background: transparent; }
     th.x-axis {
       box-shadow: inset 0 0 0 9999px rgba(255,140,0,0.35);
       color: var(--vscode-editor-foreground, var(--vscode-foreground));
@@ -284,6 +286,8 @@ export class CompareViewProvider {
     td.diff-col { color: #7ec8a0; }
     th.movavg-col { color: #7ec8e8; }
     td.movavg-col { color: #7ec8e8; }
+    th.hex-col { color: #e8c87e; }
+    td.hex-col { color: #e8c87e; }
     td.col-has-diff { background: rgba(200, 50, 50, 0.25) !important; }
     th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(200, 50, 50, 0.28); }
     td.value-diff { background: rgba(210, 180, 0, 0.65) !important; }
@@ -357,6 +361,7 @@ export class CompareViewProvider {
     <ul>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
+      <li id="ctx-show-hex">Show in hex</li>
       <li id="ctx-show-diff">Show numerical differences</li>
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
       <li id="ctx-show-movavg-30">Show moving averages (n=30)</li>
@@ -367,6 +372,8 @@ export class CompareViewProvider {
       <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
       <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
       <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
+      <li id="ctx-stats-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-stats" class="hidden"></li>
     </ul>
   </div>
 
@@ -375,7 +382,15 @@ export class CompareViewProvider {
     <div id="graph-header">
       <div id="graph-yvalues"></div>
       <button id="btn-hide-crosshair" class="hidden">Hide Crosshair</button>
-      <button id="btn-show-diff-graph">Show difference</button>
+      <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
+        Select
+        <select id="sel-graph-mode" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
+          <option value="original">original</option>
+          <option value="L-R">L - R</option>
+          <option value="R-L">R - L</option>
+          <option value="|L-R|">|L - R|</option>
+        </select>
+      </label>
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Line width
         <select id="sel-line-width" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
