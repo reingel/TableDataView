@@ -288,9 +288,9 @@ export class CompareViewProvider {
     td.movavg-col { color: #7ec8e8; }
     th.hex-col { color: #e8c87e; }
     td.hex-col { color: #e8c87e; }
-    td.col-has-diff { background: rgba(200, 50, 50, 0.25) !important; }
-    th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(200, 50, 50, 0.28); }
-    td.value-diff { background: rgba(210, 180, 0, 0.65) !important; }
+    td.col-has-diff { background: rgba(210, 60, 60, 0.35) !important; }
+    th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(210, 60, 60, 0.35); }
+    td.value-diff { background: rgba(210, 60, 60, 0.35) !important; }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;

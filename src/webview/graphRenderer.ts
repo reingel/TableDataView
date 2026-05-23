@@ -168,9 +168,7 @@ function buildDatasets(): any[] {
     const rd = lastRightData;
     const useRightColAsX = rd.selectedCols.includes(rd.xAxisCol);
     const rightDataCols = rd.selectedCols.includes(rd.xAxisCol)
-      ? rd.selectedCols.filter(c => c !== rd.xAxisCol).length > 0
-        ? rd.selectedCols.filter(c => c !== rd.xAxisCol)
-        : [rd.xAxisCol]
+      ? rd.selectedCols.filter(c => c !== rd.xAxisCol)
       : rd.selectedCols;
     const rightIndexMap = rd.rows.map((_, i) => i);
 
@@ -317,8 +315,7 @@ function getRightDataCols(): number[] {
   if (!lastRightData) return [];
   const rd = lastRightData;
   if (!rd.selectedCols.includes(rd.xAxisCol)) return rd.selectedCols;
-  const filtered = rd.selectedCols.filter(c => c !== rd.xAxisCol);
-  return filtered.length > 0 ? filtered : [rd.xAxisCol];
+  return rd.selectedCols.filter(c => c !== rd.xAxisCol);
 }
 
 function updateYValues(): void {
