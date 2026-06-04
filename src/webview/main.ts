@@ -1,6 +1,6 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
-import { getSelected, getXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
+import { getSelected, getXAxisCol, getDefaultXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
@@ -48,7 +48,7 @@ function restoreReloadState(headers: string[]): void {
 function updateToolbar(): void {
   const selected = getSelected();
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
-  const hasCustomState = getXAxisCol() !== 0 || hasDiff() || hasMovAvg() || hasHex();
+  const hasCustomState = getXAxisCol() !== getDefaultXAxisCol() || hasDiff() || hasMovAvg() || hasHex();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
@@ -386,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
       isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
       isDiff: colIndex >= 0 && isDiff(colIndex),
       movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,
-      xAxisIsDefault: getXAxisCol() === 0,
+      xAxisIsDefault: getXAxisCol() === getDefaultXAxisCol(),
       isHex: colIndex >= 0 && isHex(colIndex),
       stats: colStats,
     });

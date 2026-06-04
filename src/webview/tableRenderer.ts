@@ -1,5 +1,5 @@
 import { ParsedFile } from '../types';
-import { init as initSelector, handleColumnClick, applyHighlight, getSelected } from './columnSelector';
+import { init as initSelector, handleColumnClick, applyHighlight, getSelected, detectDefaultXAxis } from './columnSelector';
 
 const BUFFER = 40;
 let ROW_HEIGHT = 24;
@@ -199,7 +199,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   movAvgCols.clear();
   hexCols.clear();
 
-  initSelector(data.headers.length, onSelectionChange);
+  initSelector(data.headers.length, onSelectionChange, detectDefaultXAxis(data.headers, data.rows));
 
   fixStickyWidths(data);
 

@@ -1,5 +1,6 @@
 import { ExtensionToWebviewMessage, ParsedFile } from '../types';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, updateViewport, setGraphDiffMode } from './graphRenderer';
+import { detectDefaultXAxis, SEQ_X } from './columnSelector';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
 const vscode = acquireVsCodeApi();
@@ -22,7 +23,8 @@ let reverseMapping = new Map<number, number>();
 const diffCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 const movAvgCols: Record<Side, Map<number, number>> = { left: new Map(), right: new Map() };
 const hexCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
-const xAxisCol: Record<Side, number> = { left: 0, right: 0 };
+const xAxisCol: Record<Side, number> = { left: SEQ_X, right: SEQ_X };
+const defaultXAxisCol: Record<Side, number> = { left: SEQ_X, right: SEQ_X };
 const selectedCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 
 // Columns that have at least one differing cell (by side)
@@ -196,7 +198,7 @@ function updateToolbar(): void {
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = !hasLeft && !hasRight;
 
   const hasCustomState =
-    xAxisCol.left !== 0 || xAxisCol.right !== 0 ||
+    xAxisCol.left !== defaultXAxisCol.left || xAxisCol.right !== defaultXAxisCol.right ||
     diffCols.left.size > 0 || diffCols.right.size > 0 ||
     movAvgCols.left.size > 0 || movAvgCols.right.size > 0 ||
     hexCols.left.size > 0 || hexCols.right.size > 0;
@@ -388,9 +390,9 @@ function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void 
     if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
   }
 
-  // Always keep x-axis col selected
-  selectedCols.left.add(xAxisCol.left);
-  selectedCols.right.add(xAxisCol.right);
+  // Always keep x-axis col selected (skip the sequence-number sentinel)
+  if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
+  if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
 
   lastClickedCol[side] = colIdx;
   applyHighlight('left');
@@ -550,16 +552,14 @@ function setXAxis(side: Side, colIdx: number): void {
 }
 
 function resetXAxis(side: Side): void {
-  xAxisCol[side] = 0;
-  selectedCols[side].add(0);
-  applyHighlight(side);
-  const other = otherSide(side);
-  const mi = getMappedCol(side, 0);
-  if (mi !== undefined || reverseMapping.get(0) !== undefined) {
-    xAxisCol[other] = 0;
-    selectedCols[other].add(0);
-    applyHighlight(other);
-  }
+  // Reset both sides to their own auto-detected default (mirrored action).
+  xAxisCol.left = defaultXAxisCol.left;
+  xAxisCol.right = defaultXAxisCol.right;
+  if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
+  if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
+  void side;
+  applyHighlight('left');
+  applyHighlight('right');
   updateToolbar();
 }
 
@@ -663,7 +663,9 @@ function restoreCompareReloadState(): void {
 }
 
 function resetAll(): void {
-  xAxisCol.left = 0; xAxisCol.right = 0;
+  xAxisCol.left = defaultXAxisCol.left; xAxisCol.right = defaultXAxisCol.right;
+  if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
+  if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
   diffCols.left.clear(); diffCols.right.clear();
   movAvgCols.left.clear(); movAvgCols.right.clear();
   hexCols.left.clear(); hexCols.right.clear();
@@ -740,10 +742,13 @@ function initPane(side: Side, data: ParsedFile): void {
     headerRow.appendChild(th);
   });
 
-  // Initial column selection: col 0
+  // Initial column selection: col 0. The x-axis defaults to the row sequence
+  // unless the first column looks like an index/time axis.
   selectedCols[side].clear();
   selectedCols[side].add(0);
-  xAxisCol[side] = 0;
+  defaultXAxisCol[side] = detectDefaultXAxis(data.headers, data.rows);
+  xAxisCol[side] = defaultXAxisCol[side];
+  if (xAxisCol[side] >= 0) selectedCols[side].add(xAxisCol[side]);
 
   renderBody(side);
 
@@ -845,7 +850,7 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   const movAvgWin = colIndex >= 0 ? movAvgCols[side].get(colIndex) : undefined;
   const isHexCol = colIndex >= 0 && hexCols[side].has(colIndex);
   const isTransformed = isDiff || movAvgWin !== undefined || isHexCol;
-  const xAxisIsDefault = xAxisCol[side] === 0;
+  const xAxisIsDefault = xAxisCol[side] === defaultXAxisCol[side];
 
   const setItemVisible = (id: string, visible: boolean) =>
     document.getElementById(id)!.classList.toggle('hidden', !visible);

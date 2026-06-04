@@ -75,7 +75,7 @@ export function setCrosshairToRow(rowIdx: number): void {
   const idx = dispIdx >= 0 ? dispIdx : rowIdx;
   const xVal = useColAsX
     ? parseFloat(displayRows[idx]?.[lastXAxisCol])
-    : (rowIndexMap[idx] ?? rowIdx);
+    : ((rowIndexMap[idx] ?? rowIdx) + 1);
   if (!isFinite(xVal)) return;
   crosshairDataX = xVal;
   crosshairOrigRowIdx = rowIdx;
@@ -89,7 +89,7 @@ function buildSegments(rows: string[][], xAxisCol: number, colIdx: number, useCo
   const segments: DataPoint[][] = [];
   let cur: DataPoint[] = [];
   rows.forEach((row, i) => {
-    const xVal = useColAsX ? parseFloat(row[xAxisCol]) : indexMap[i];
+    const xVal = useColAsX ? parseFloat(row[xAxisCol]) : indexMap[i] + 1;
     const yVal = parseFloat(row[colIdx]);
     if (isFinite(xVal) && isFinite(yVal)) {
       cur.push({ x: xVal, y: yVal, rowIdx: indexMap[i] });
@@ -119,7 +119,7 @@ function buildDatasets(): any[] {
       const segments: DataPoint[][] = [];
       let cur: DataPoint[] = [];
       for (let i = 0; i < nRows; i++) {
-        const xVal = useColAsX ? parseFloat(displayRows[i][lastXAxisCol]) : rowIndexMap[i];
+        const xVal = useColAsX ? parseFloat(displayRows[i][lastXAxisCol]) : rowIndexMap[i] + 1;
         const lv = parseFloat(displayRows[i][leftCol]);
         const rv = parseFloat(rd.rows[i][rc]);
         if (isFinite(xVal) && isFinite(lv) && isFinite(rv)) {
@@ -210,7 +210,7 @@ const viewportPlugin = {
     const ei = Math.min(dispLen - 1, toIdx(viewportEndRow));
     const toXData = (i: number) => useColAsX
       ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
-      : (rowIndexMap[i]);
+      : (rowIndexMap[i] + 1);
     const startX = xScale.getPixelForValue(toXData(si));
     const endX = xScale.getPixelForValue(toXData(ei));
     if (endX <= startX) return;
@@ -929,7 +929,7 @@ export function updateViewport(startRow: number, endRow: number): void {
     const useColAsX = lastCols.includes(lastXAxisCol);
     const toXData = (i: number) => useColAsX
       ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
-      : (rowIndexMap[i]);
+      : (rowIndexMap[i] + 1);
 
     const si = Math.max(0, toIdx(startRow));
     const ei = Math.min(dispLen - 1, toIdx(endRow));
