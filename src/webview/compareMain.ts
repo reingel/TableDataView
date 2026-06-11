@@ -339,6 +339,7 @@ function renderBody(side: Side): void {
       td.dataset.colIndex = String(j);
       td.dataset.side = side;
       td.className = (j === 0 ? 'align-left col-first' : 'align-left') + extraCls;
+      applyFixedWidth(td, side, j);
       td.addEventListener('click', e => handleColumnClick(side, j, e as MouseEvent));
       tr.appendChild(td);
     }
@@ -694,6 +695,43 @@ function resetAll(): void {
 const PX_PER_CHAR = 9;
 const PADDING = 24;
 
+const COL_MIN_W = 50;
+const COL_MAX_W = 480;
+const COL_PAD = 22;
+const colWidths: Record<Side, number[]> = { left: [], right: [] };
+let measureCanvas: HTMLCanvasElement | null = null;
+
+// Fixed pixel width per column from header + sampled values, so columns don't
+// jitter as the virtual scroller renders different rows.
+function computeColumnWidths(data: ParsedFile): number[] {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas');
+  const ctx = measureCanvas.getContext('2d')!;
+  const cs = getComputedStyle(document.body);
+  ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+
+  const n = data.rows.length;
+  const sampleIdx: number[] = [];
+  const head = Math.min(120, n);
+  for (let i = 0; i < head; i++) sampleIdx.push(i);
+  for (let i = Math.max(head, n - 120); i < n; i++) sampleIdx.push(i);
+
+  return data.headers.map((h, col) => {
+    let max = ctx.measureText(h ?? '').width;
+    for (const i of sampleIdx) {
+      const v = data.rows[i]?.[col];
+      if (v) { const w = ctx.measureText(v).width; if (w > max) max = w; }
+    }
+    return Math.min(COL_MAX_W, Math.max(COL_MIN_W, Math.ceil(max) + COL_PAD));
+  });
+}
+
+function applyFixedWidth(el: HTMLElement, side: Side, colIdx: number): void {
+  if (colIdx === 0) return; // first column uses the sticky col-first width
+  const w = colWidths[side][colIdx];
+  if (w === undefined) return;
+  el.style.width = el.style.minWidth = el.style.maxWidth = `${w}px`;
+}
+
 function initPane(side: Side, data: ParsedFile): void {
   const rowNumPx = Math.max(String(displayRowCount).length * PX_PER_CHAR + PADDING, 40);
   const table = document.getElementById(`${side}-table`)!;
@@ -710,7 +748,8 @@ function initPane(side: Side, data: ParsedFile): void {
     const v = data.rows[i]?.[0];
     if (v && v.length > maxLen) maxLen = v.length;
   }
-  const colFirstPx = Math.max(maxLen * PX_PER_CHAR + PADDING, 50);
+  colWidths[side] = computeColumnWidths(data);
+  const colFirstPx = colWidths[side][0] ?? Math.max(maxLen * PX_PER_CHAR + PADDING, 50);
   table.style.setProperty('--col-first-width', `${colFirstPx}px`);
 
   const colIndexRow = document.getElementById(`${side}-col-index-row`)!;
@@ -723,6 +762,7 @@ function initPane(side: Side, data: ParsedFile): void {
     th.textContent = String(colIdx + 1);
     th.dataset.colIndex = String(colIdx);
     th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
+    applyFixedWidth(th, side, colIdx);
     colIndexRow.appendChild(th);
   });
 
@@ -738,6 +778,7 @@ function initPane(side: Side, data: ParsedFile): void {
     th.dataset.colIndex = String(colIdx);
     const hasDiff = diffColumnSet[side].has(colIdx) ? ' col-has-diff' : '';
     th.className = (colIdx === 0 ? 'align-left col-first' : 'align-left') + hasDiff;
+    applyFixedWidth(th, side, colIdx);
     th.addEventListener('click', e => handleColumnClick(side, colIdx, e as MouseEvent));
     headerRow.appendChild(th);
   });
@@ -1006,6 +1047,43 @@ function escapeHtml(str: string): string {
 
 // ---- Drag scroll ----
 
+// Show the full cell value in a floating overlay when the pointer rests on a
+// cell whose value is clipped by the fixed column width.
+let cellTipTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideCellTooltip(): void {
+  if (cellTipTimer !== null) { clearTimeout(cellTipTimer); cellTipTimer = null; }
+  document.getElementById('cell-tooltip')?.classList.add('hidden');
+}
+
+function showCellTooltip(td: HTMLElement): void {
+  const tip = document.getElementById('cell-tooltip')!;
+  tip.textContent = td.textContent ?? '';
+  tip.classList.remove('hidden');
+  const cell = td.getBoundingClientRect();
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  let x = cell.left;
+  let y = cell.bottom + 2;
+  if (x + tw > window.innerWidth - 4) x = window.innerWidth - tw - 4;
+  if (x < 4) x = 4;
+  if (y + th > window.innerHeight - 4) y = cell.top - th - 2;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+function initCellTooltip(container: HTMLElement): void {
+  container.addEventListener('mouseover', e => {
+    const td = (e.target as HTMLElement).closest<HTMLElement>('td[data-col-index], th[data-col-index]');
+    if (!td) { hideCellTooltip(); return; }
+    if (td.scrollWidth <= td.clientWidth + 1) { hideCellTooltip(); return; }
+    if (cellTipTimer !== null) clearTimeout(cellTipTimer);
+    cellTipTimer = setTimeout(() => { cellTipTimer = null; showCellTooltip(td); }, 400);
+  });
+  container.addEventListener('mouseout', hideCellTooltip);
+  container.addEventListener('scroll', hideCellTooltip, { passive: true });
+}
+
 function addDragScroll(container: HTMLElement): void {
   container.addEventListener('mousedown', (e: MouseEvent) => {
     if (e.button !== 0) return;
@@ -1068,6 +1146,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   addDragScroll(leftPane);
   addDragScroll(rightPane);
+  initCellTooltip(leftPane);
+  initCellTooltip(rightPane);
 
   leftPane.addEventListener('scroll', () => {
     if (syncScrollFlag) return;

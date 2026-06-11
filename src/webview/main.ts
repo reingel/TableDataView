@@ -236,6 +236,44 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
+// Show the full cell value in a floating overlay when the pointer rests on a
+// cell whose value is clipped by the fixed column width.
+let cellTipTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideCellTooltip(): void {
+  if (cellTipTimer !== null) { clearTimeout(cellTipTimer); cellTipTimer = null; }
+  document.getElementById('cell-tooltip')?.classList.add('hidden');
+}
+
+function showCellTooltip(td: HTMLElement): void {
+  const tip = document.getElementById('cell-tooltip')!;
+  tip.textContent = td.textContent ?? '';
+  tip.classList.remove('hidden');
+  const cell = td.getBoundingClientRect();
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  let x = cell.left;
+  let y = cell.bottom + 2;
+  if (x + tw > window.innerWidth - 4) x = window.innerWidth - tw - 4;
+  if (x < 4) x = 4;
+  if (y + th > window.innerHeight - 4) y = cell.top - th - 2;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+function initCellTooltip(container: HTMLElement): void {
+  container.addEventListener('mouseover', e => {
+    const td = (e.target as HTMLElement).closest<HTMLElement>('td[data-col-index], th[data-col-index]');
+    if (!td) { hideCellTooltip(); return; }
+    // Only when the value is actually clipped.
+    if (td.scrollWidth <= td.clientWidth + 1) { hideCellTooltip(); return; }
+    if (cellTipTimer !== null) clearTimeout(cellTipTimer);
+    cellTipTimer = setTimeout(() => { cellTipTimer = null; showCellTooltip(td); }, 400);
+  });
+  container.addEventListener('mouseout', hideCellTooltip);
+  container.addEventListener('scroll', hideCellTooltip, { passive: true });
+}
+
 function addDragScroll(container: HTMLElement): void {
   container.addEventListener('mousedown', (e: MouseEvent) => {
     if (e.button !== 0) return;
@@ -411,6 +449,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   addDragScroll(document.getElementById('table-container')!);
+  initCellTooltip(document.getElementById('table-container')!);
 
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 

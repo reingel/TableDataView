@@ -157,6 +157,8 @@ export class TableViewProvider {
       border-right: 1px solid var(--vscode-panel-border, #444);
       border-bottom: 1px solid var(--vscode-panel-border, #444);
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       cursor: pointer;
       user-select: none;
     }
@@ -259,6 +261,22 @@ export class TableViewProvider {
     }
     @keyframes tdv-spin { to { transform: rotate(360deg); } }
     #loading-text { font-size: 0.95em; }
+    #cell-tooltip {
+      position: fixed;
+      z-index: 200;
+      max-width: 640px;
+      padding: 3px 8px;
+      background: #ffd866;
+      color: #1e1e1e;
+      border: 1px solid #b8860b;
+      border-radius: 3px;
+      font-size: 0.9em;
+      font-weight: 600;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      pointer-events: none;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.55);
+    }
     td.crosshair-row {
       outline: 2px solid var(--vscode-focusBorder, #007acc);
       outline-offset: -2px;
@@ -361,6 +379,8 @@ export class TableViewProvider {
     <div class="loading-spinner"></div>
     <div id="loading-text">로딩 중...</div>
   </div>
+
+  <div id="cell-tooltip" class="hidden"></div>
 
   <div id="context-menu" class="hidden">
     <ul>

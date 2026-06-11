@@ -169,6 +169,47 @@ export function scrollToRow(rowIdx: number): void {
   scheduleRender();
 }
 
+let colWidths: number[] = [];
+let measureCanvas: HTMLCanvasElement | null = null;
+
+const COL_MIN_W = 50;
+const COL_MAX_W = 480;
+const COL_PAD = 22; // padding (10+10) + border + a little slack
+
+// Compute a fixed pixel width per column from the header and a sample of values,
+// measured with the table's actual font. Locking widths keeps columns from
+// jittering as the virtual scroller renders different rows.
+function computeColumnWidths(data: ParsedFile): number[] {
+  if (!measureCanvas) measureCanvas = document.createElement('canvas');
+  const ctx = measureCanvas.getContext('2d')!;
+  const cs = getComputedStyle(document.body);
+  ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+
+  const n = data.rows.length;
+  const sampleIdx: number[] = [];
+  const head = Math.min(120, n);
+  for (let i = 0; i < head; i++) sampleIdx.push(i);
+  for (let i = Math.max(head, n - 120); i < n; i++) sampleIdx.push(i);
+
+  return data.headers.map((h, col) => {
+    let max = ctx.measureText(h ?? '').width;
+    for (const i of sampleIdx) {
+      const v = data.rows[i]?.[col];
+      if (v) { const w = ctx.measureText(v).width; if (w > max) max = w; }
+    }
+    return Math.min(COL_MAX_W, Math.max(COL_MIN_W, Math.ceil(max) + COL_PAD));
+  });
+}
+
+// Lock a cell to its column's computed width. Column 0 is the sticky first
+// column, sized separately via the --col-first-width CSS variable.
+function applyFixedWidth(el: HTMLElement, colIdx: number): void {
+  if (colIdx === 0) return;
+  const w = colWidths[colIdx];
+  if (w === undefined) return;
+  el.style.width = el.style.minWidth = el.style.maxWidth = `${w}px`;
+}
+
 function fixStickyWidths(data: ParsedFile): void {
   const PX_PER_CHAR = 9;
   const PADDING = 24;
@@ -202,6 +243,10 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   initSelector(data.headers.length, onSelectionChange, detectDefaultXAxis(data.headers, data.rows));
 
   fixStickyWidths(data);
+  colWidths = computeColumnWidths(data);
+  if (colWidths[0] !== undefined) {
+    document.documentElement.style.setProperty('--col-first-width', `${colWidths[0]}px`);
+  }
 
   const colIndexRow = document.getElementById('col-index-row')!;
   colIndexRow.innerHTML = '';
@@ -213,6 +258,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     th.textContent = String(colIdx + 1);
     th.dataset.colIndex = String(colIdx);
     th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
+    applyFixedWidth(th, colIdx);
     colIndexRow.appendChild(th);
   });
 
@@ -229,6 +275,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     th.textContent = header;
     th.dataset.colIndex = String(colIdx);
     th.className = colIdx === 0 ? 'align-left col-first' : 'align-left';
+    applyFixedWidth(th, colIdx);
     th.addEventListener('click', e => handleColumnClick(colIdx, e as MouseEvent));
     headerRow.appendChild(th);
   });
@@ -351,6 +398,7 @@ function renderBody(): void {
       td.textContent = displayVal;
       td.dataset.colIndex = String(j);
       td.className = (j === 0 ? 'align-left col-first' : 'align-left') + extraCls;
+      applyFixedWidth(td, j);
       td.addEventListener('click', e => handleColumnClick(j, e as MouseEvent));
       tr.appendChild(td);
     }
