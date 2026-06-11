@@ -64,6 +64,11 @@ let renderPending = false;
 
 // Scroll sync
 let syncScrollFlag = false;
+// While true, left/right scroll sync is disabled so a column jump can center
+// each pane on its own (differently positioned) matched column. Stays on until
+// the user scrolls again (wheel/drag), then sync resumes. (A timer is unreliable
+// here: on huge files the programmatic scroll event can fire late and re-sync.)
+let scrollDecoupled = false;
 
 function otherSide(side: Side): Side {
   return side === 'left' ? 'right' : 'left';
@@ -748,7 +753,7 @@ function initPane(side: Side, data: ParsedFile): void {
     const v = data.rows[i]?.[0];
     if (v && v.length > maxLen) maxLen = v.length;
   }
-  colWidths[side] = computeColumnWidths(data);
+  // colWidths[side] is precomputed (and matched-pair-equalized) in commitCompareData.
   const colFirstPx = colWidths[side][0] ?? Math.max(maxLen * PX_PER_CHAR + PADDING, 50);
   table.style.setProperty('--col-first-width', `${colFirstPx}px`);
 
@@ -1031,6 +1036,16 @@ function commitCompareData(left: ParsedFile, right: ParsedFile): void {
     void maxRows;
 
     computeDiffColumns();
+
+    // Compute per-pane column widths, then force each matched (mapped) pair to a
+    // common width so left/right columns of the same header line up.
+    colWidths.left = computeColumnWidths(leftData);
+    colWidths.right = computeColumnWidths(rightData);
+    for (const [li, ri] of columnMapping) {
+      const w = Math.max(colWidths.left[li] ?? 0, colWidths.right[ri] ?? 0);
+      if (w > 0) { colWidths.left[li] = w; colWidths.right[ri] = w; }
+    }
+
     initPane('left', leftData);
     initPane('right', rightData);
     applyHighlight('left');
@@ -1082,6 +1097,163 @@ function initCellTooltip(container: HTMLElement): void {
   });
   container.addEventListener('mouseout', hideCellTooltip);
   container.addEventListener('scroll', hideCellTooltip, { passive: true });
+}
+
+// ---- Column search (type-to-find header) ----
+// Typing an alphanumeric key opens an overlay listing headers (from both panes)
+// containing the typed text; Up/Down + Enter or a click centers that column.
+let colSearchActive = false;
+let colSearchMatches: { side: Side; col: number }[] = [];
+let colSearchSel = 0;
+
+function centerPaneColumn(side: Side, col: number): void {
+  const pane = document.getElementById(`${side}-pane`)!;
+  if (col === 0) { pane.scrollLeft = 0; return; }
+  const th = document.querySelector<HTMLElement>(`#${side}-header-row th[data-col-index="${col}"]`);
+  if (!th) return;
+  pane.scrollLeft = Math.max(0, th.offsetLeft + th.offsetWidth / 2 - pane.clientWidth / 2);
+}
+
+function flashColumn(side: Side, col: number): void {
+  document.querySelectorAll(`#${side}-header-row th[data-col-index="${col}"], #${side}-col-index-row th[data-col-index="${col}"]`)
+    .forEach(el => { void (el as HTMLElement).offsetWidth; el.classList.add('col-flash'); });
+}
+
+function findColByName(side: Side, name: string): number | undefined {
+  const headers = side === 'left' ? leftData?.headers : rightData?.headers;
+  if (!headers) return undefined;
+  const lower = name.toLowerCase();
+  const i = headers.findIndex(h => h.toLowerCase() === lower);
+  return i >= 0 ? i : undefined;
+}
+
+function gotoCompareColumn(side: Side, col: number): void {
+  const other = otherSide(side);
+  const headers = side === 'left' ? leftData?.headers : rightData?.headers;
+  const name = headers?.[col] ?? '';
+  // Prefer the other pane's column with the same header name; fall back to the
+  // fuzzy column mapping.
+  const otherCol = findColByName(other, name) ?? getMappedCol(side, col);
+
+  document.querySelectorAll('.col-flash').forEach(el => el.classList.remove('col-flash'));
+
+  // Break scroll sync so each pane can center its own matched column. Sync
+  // resumes on the next user scroll (see recouple listeners).
+  scrollDecoupled = true;
+  centerPaneColumn(side, col);
+  if (otherCol !== undefined) centerPaneColumn(other, otherCol);
+
+  flashColumn(side, col);
+  if (otherCol !== undefined) flashColumn(other, otherCol);
+}
+
+function renderColSearchList(): void {
+  const ul = document.getElementById('col-search-list')!;
+  ul.innerHTML = '';
+  if (colSearchMatches.length === 0) {
+    const empty = document.createElement('li');
+    empty.id = 'col-search-empty';
+    empty.textContent = 'No matching column';
+    ul.appendChild(empty);
+    return;
+  }
+  colSearchMatches.forEach((m, idx) => {
+    const headers = m.side === 'left' ? leftData?.headers : rightData?.headers;
+    const li = document.createElement('li');
+    li.dataset.matchIdx = String(idx);
+    if (idx === colSearchSel) li.classList.add('selected');
+    const tag = document.createElement('span');
+    tag.className = `col-side ${m.side}`;
+    tag.textContent = m.side === 'left' ? 'L' : 'R';
+    const num = document.createElement('span');
+    num.className = 'col-num';
+    num.textContent = String(m.col + 1);
+    const name = document.createElement('span');
+    name.textContent = headers?.[m.col] ?? '';
+    li.appendChild(tag);
+    li.appendChild(num);
+    li.appendChild(name);
+    ul.appendChild(li);
+  });
+}
+
+function updateColSearch(): void {
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  const q = input.value.trim().toLowerCase();
+  colSearchMatches = [];
+  leftData?.headers.forEach((h, i) => { if (h.toLowerCase().includes(q)) colSearchMatches.push({ side: 'left', col: i }); });
+  rightData?.headers.forEach((h, i) => { if (h.toLowerCase().includes(q)) colSearchMatches.push({ side: 'right', col: i }); });
+  colSearchSel = 0;
+  renderColSearchList();
+}
+
+function moveColSearchSel(delta: number): void {
+  if (colSearchMatches.length === 0) return;
+  colSearchSel = Math.max(0, Math.min(colSearchMatches.length - 1, colSearchSel + delta));
+  renderColSearchList();
+  document.querySelector('#col-search-list li.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+function commitColSearch(): void {
+  if (colSearchMatches.length === 0) return;
+  const m = colSearchMatches[colSearchSel];
+  closeColSearch();
+  gotoCompareColumn(m.side, m.col);
+}
+
+function openColSearch(initialChar: string): void {
+  if (!leftData && !rightData) return;
+  colSearchActive = true;
+  document.getElementById('col-search')!.classList.remove('hidden');
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  input.value = initialChar;
+  input.focus();
+  updateColSearch();
+}
+
+function closeColSearch(): void {
+  if (!colSearchActive) return;
+  colSearchActive = false;
+  document.getElementById('col-search')!.classList.add('hidden');
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  input.value = '';
+  input.blur();
+}
+
+function initColSearch(): void {
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  const list = document.getElementById('col-search-list')!;
+
+  input.addEventListener('input', updateColSearch);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveColSearchSel(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveColSearchSel(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); commitColSearch(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeColSearch(); }
+  });
+  list.addEventListener('mousedown', e => e.preventDefault());
+  list.addEventListener('click', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-match-idx]');
+    if (!li) return;
+    colSearchSel = parseInt(li.dataset.matchIdx!);
+    commitColSearch();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (colSearchActive) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (document.activeElement as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
+      e.preventDefault();
+      openColSearch(e.key);
+    }
+  });
+
+  document.addEventListener('mousedown', e => {
+    if (!colSearchActive) return;
+    if (!(e.target as HTMLElement).closest('#col-search')) closeColSearch();
+  });
 }
 
 function addDragScroll(container: HTMLElement): void {
@@ -1148,9 +1320,19 @@ document.addEventListener('DOMContentLoaded', () => {
   addDragScroll(rightPane);
   initCellTooltip(leftPane);
   initCellTooltip(rightPane);
+  initColSearch();
+
+  // A user-initiated scroll (wheel or drag) re-enables left/right sync after a
+  // column-search jump decoupled the panes.
+  const recouple = () => { scrollDecoupled = false; };
+  leftPane.addEventListener('wheel', recouple, { passive: true });
+  rightPane.addEventListener('wheel', recouple, { passive: true });
+  leftPane.addEventListener('mousedown', recouple);
+  rightPane.addEventListener('mousedown', recouple);
 
   leftPane.addEventListener('scroll', () => {
     if (syncScrollFlag) return;
+    if (scrollDecoupled) { scheduleRender(); syncViewport(); return; }
     syncScrollFlag = true;
     rightPane.scrollTop = leftPane.scrollTop;
     rightPane.scrollLeft = leftPane.scrollLeft;
@@ -1161,6 +1343,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   rightPane.addEventListener('scroll', () => {
     if (syncScrollFlag) return;
+    if (scrollDecoupled) { scheduleRender(); syncViewport(); return; }
     syncScrollFlag = true;
     leftPane.scrollTop = rightPane.scrollTop;
     leftPane.scrollLeft = rightPane.scrollLeft;
@@ -1236,10 +1419,12 @@ document.addEventListener('DOMContentLoaded', () => {
     scheduleRender();
   });
   document.getElementById('btn-left')!.addEventListener('click', () => {
+    recouple();
     leftPane.scrollLeft = 0;
     rightPane.scrollLeft = 0;
   });
   document.getElementById('btn-right')!.addEventListener('click', () => {
+    recouple();
     leftPane.scrollLeft = leftPane.scrollWidth;
     rightPane.scrollLeft = rightPane.scrollWidth;
   });

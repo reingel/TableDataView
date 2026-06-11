@@ -274,6 +274,144 @@ function initCellTooltip(container: HTMLElement): void {
   container.addEventListener('scroll', hideCellTooltip, { passive: true });
 }
 
+// ---- Column search (type-to-find header) ----
+// Typing an alphanumeric key opens an overlay with an input + a list of headers
+// matching the typed prefix; Up/Down + Enter or a click scrolls to that column.
+let colSearchActive = false;
+let colSearchMatches: number[] = [];
+let colSearchSel = 0;
+
+function gotoColumn(colIdx: number): void {
+  const container = document.getElementById('table-container')!;
+  if (colIdx === 0) {
+    container.scrollLeft = 0;
+  } else {
+    const th = document.querySelector<HTMLElement>(`#header-row th[data-col-index="${colIdx}"]`);
+    if (!th) return;
+    // Center the column horizontally within the visible area.
+    container.scrollLeft = Math.max(0, th.offsetLeft + th.offsetWidth / 2 - container.clientWidth / 2);
+  }
+  // Flash the column header so the user can spot the target.
+  document.querySelectorAll('.col-flash').forEach(el => el.classList.remove('col-flash'));
+  document.querySelectorAll(`#header-row th[data-col-index="${colIdx}"], #col-index-row th[data-col-index="${colIdx}"]`)
+    .forEach(el => {
+      el.classList.remove('col-flash');
+      void (el as HTMLElement).offsetWidth; // restart animation
+      el.classList.add('col-flash');
+    });
+}
+
+function renderColSearchList(): void {
+  const ul = document.getElementById('col-search-list')!;
+  ul.innerHTML = '';
+  if (!currentData || colSearchMatches.length === 0) {
+    const empty = document.createElement('li');
+    empty.id = 'col-search-empty';
+    empty.textContent = 'No matching column';
+    ul.appendChild(empty);
+    return;
+  }
+  colSearchMatches.forEach((colIdx, idx) => {
+    const li = document.createElement('li');
+    li.dataset.matchIdx = String(idx);
+    if (idx === colSearchSel) li.classList.add('selected');
+    const num = document.createElement('span');
+    num.className = 'col-num';
+    num.textContent = String(colIdx + 1);
+    const name = document.createElement('span');
+    name.textContent = currentData!.headers[colIdx];
+    li.appendChild(num);
+    li.appendChild(name);
+    ul.appendChild(li);
+  });
+}
+
+function updateColSearch(): void {
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  const q = input.value.trim().toLowerCase();
+  colSearchMatches = [];
+  if (currentData) {
+    currentData.headers.forEach((h, i) => {
+      if (h.toLowerCase().includes(q)) colSearchMatches.push(i);
+    });
+  }
+  colSearchSel = 0;
+  renderColSearchList();
+}
+
+function moveColSearchSel(delta: number): void {
+  if (colSearchMatches.length === 0) return;
+  colSearchSel = Math.max(0, Math.min(colSearchMatches.length - 1, colSearchSel + delta));
+  renderColSearchList();
+  const sel = document.querySelector('#col-search-list li.selected');
+  sel?.scrollIntoView({ block: 'nearest' });
+}
+
+function commitColSearch(): void {
+  if (colSearchMatches.length === 0) return;
+  const colIdx = colSearchMatches[colSearchSel];
+  closeColSearch();
+  gotoColumn(colIdx);
+}
+
+function openColSearch(initialChar: string): void {
+  if (!currentData) return;
+  colSearchActive = true;
+  document.getElementById('col-search')!.classList.remove('hidden');
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  input.value = initialChar;
+  input.focus();
+  updateColSearch();
+}
+
+function closeColSearch(): void {
+  if (!colSearchActive) return;
+  colSearchActive = false;
+  document.getElementById('col-search')!.classList.add('hidden');
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  input.value = '';
+  input.blur();
+}
+
+function initColSearch(): void {
+  const input = document.getElementById('col-search-input') as HTMLInputElement;
+  const list = document.getElementById('col-search-list')!;
+
+  input.addEventListener('input', updateColSearch);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveColSearchSel(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveColSearchSel(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); commitColSearch(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeColSearch(); }
+  });
+  // Keep input focus when clicking an item (mousedown would blur first).
+  list.addEventListener('mousedown', e => e.preventDefault());
+  list.addEventListener('click', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-match-idx]');
+    if (!li) return;
+    colSearchSel = parseInt(li.dataset.matchIdx!);
+    commitColSearch();
+  });
+
+  // Open on alphanumeric keypress when not already typing somewhere.
+  document.addEventListener('keydown', e => {
+    if (colSearchActive) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (document.activeElement as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
+      e.preventDefault();
+      openColSearch(e.key);
+    }
+  });
+
+  // Close when clicking outside the overlay.
+  document.addEventListener('mousedown', e => {
+    if (!colSearchActive) return;
+    if (!(e.target as HTMLElement).closest('#col-search')) closeColSearch();
+  });
+}
+
 function addDragScroll(container: HTMLElement): void {
   container.addEventListener('mousedown', (e: MouseEvent) => {
     if (e.button !== 0) return;
@@ -450,6 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   addDragScroll(document.getElementById('table-container')!);
   initCellTooltip(document.getElementById('table-container')!);
+  initColSearch();
 
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 

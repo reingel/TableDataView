@@ -297,6 +297,57 @@ export class CompareViewProvider {
       pointer-events: none;
       box-shadow: 0 2px 10px rgba(0,0,0,0.55);
     }
+    #col-search {
+      position: fixed;
+      top: 44px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 150;
+      width: 360px;
+      max-width: 80%;
+      display: flex;
+      flex-direction: column;
+      background: var(--vscode-editorWidget-background, #252526);
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 4px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      overflow: hidden;
+    }
+    #col-search-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 9px;
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #ccc);
+      border: none;
+      border-bottom: 1px solid var(--vscode-panel-border, #444);
+      outline: none;
+      font-family: inherit;
+      font-size: 1em;
+    }
+    #col-search-list { list-style: none; margin: 0; padding: 4px 0; max-height: 320px; overflow-y: auto; }
+    #col-search-list li {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      padding: 4px 10px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #col-search-list li .col-side { font-size: 0.8em; font-weight: bold; min-width: 1.4em; }
+    #col-search-list li .col-side.left { color: #4bc0c0; }
+    #col-search-list li .col-side.right { color: #ff9f40; }
+    #col-search-list li .col-num { color: var(--vscode-descriptionForeground, #888); font-size: 0.85em; min-width: 2.6em; text-align: right; }
+    #col-search-list li:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08)); }
+    #col-search-list li.selected { background: var(--vscode-list-activeSelectionBackground, #094771); color: var(--vscode-list-activeSelectionForeground, #fff); }
+    #col-search-empty { padding: 6px 10px; color: var(--vscode-descriptionForeground, #888); font-style: italic; }
+    @keyframes tdv-col-flash {
+      from { box-shadow: inset 0 0 0 9999px rgba(255,200,50,0.55); }
+      to   { box-shadow: inset 0 0 0 9999px rgba(255,200,50,0); }
+    }
+    th.col-flash { animation: tdv-col-flash 1s ease-out; }
     td.crosshair-row {
       outline: 2px solid var(--vscode-focusBorder, #007acc);
       outline-offset: -2px;
@@ -412,6 +463,11 @@ export class CompareViewProvider {
   </div>
 
   <div id="cell-tooltip" class="hidden"></div>
+
+  <div id="col-search" class="hidden">
+    <input id="col-search-input" type="text" autocomplete="off" spellcheck="false" placeholder="Go to column…" />
+    <ul id="col-search-list"></ul>
+  </div>
 
   <div id="context-menu" class="hidden">
     <ul>
