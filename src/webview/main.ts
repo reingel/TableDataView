@@ -1,4 +1,4 @@
-import { ExtensionToWebviewMessage, ParsedFile } from '../types';
+import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
 import { getSelected, getXAxisCol, getDefaultXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
@@ -95,28 +95,67 @@ function handleShowGraph(): void {
   syncViewport();
 }
 
+// The file is streamed as loadStart -> loadChunk* -> loadEnd. Accumulate rows
+// until loadEnd, then render in one pass.
+let loadAccum: { seq: number; meta: ParsedMeta; rows: string[][] } | null = null;
+
+function setLoadingText(loaded: number, total: number): void {
+  const el = document.getElementById('loading-text');
+  if (!el) return;
+  el.textContent = total > 0
+    ? `로딩 중... ${loaded.toLocaleString()} / ${total.toLocaleString()} 행`
+    : '로딩 중...';
+}
+
+function showLoading(total = 0): void {
+  document.getElementById('loading-overlay')?.classList.remove('hidden');
+  setLoadingText(0, total);
+}
+
+function hideLoading(): void {
+  document.getElementById('loading-overlay')?.classList.add('hidden');
+}
+
 window.addEventListener('message', (event: MessageEvent) => {
   const msg = event.data as ExtensionToWebviewMessage;
 
-  if (msg.type === 'loadData') {
-    currentData = msg.payload;
-
-    document.getElementById('file-name')!.textContent = msg.payload.fileName;
-
-    if (msg.payload.truncated) {
-      document.getElementById('truncate-notice')!.textContent =
-        `Showing first ${msg.payload.rows.length.toLocaleString()} of ${msg.payload.totalRows.toLocaleString()} rows`;
-      document.getElementById('truncate-notice')!.classList.remove('hidden');
+  if (msg.type === 'loadStart' && msg.channel === 'single') {
+    loadAccum = { seq: msg.seq, meta: msg.meta, rows: [] };
+    showLoading(msg.meta.totalRows);
+  } else if (msg.type === 'loadChunk' && msg.channel === 'single') {
+    if (loadAccum && loadAccum.seq === msg.seq) {
+      for (let i = 0; i < msg.rows.length; i++) loadAccum.rows.push(msg.rows[i]);
+      setLoadingText(loadAccum.rows.length, loadAccum.meta.totalRows);
     }
-
-    renderTable(msg.payload, updateToolbar);
-    restoreReloadState(msg.payload.headers);
-    updateToolbar();
+  } else if (msg.type === 'loadEnd' && msg.channel === 'single') {
+    if (loadAccum && loadAccum.seq === msg.seq) {
+      const payload: ParsedFile = { ...loadAccum.meta, rows: loadAccum.rows };
+      loadAccum = null;
+      onLoadData(payload);
+      hideLoading();
+    }
   } else if (msg.type === 'error') {
     const container = document.getElementById('table-container')!;
     container.innerHTML = `<div class="error-message">${escapeHtml(msg.message)}</div>`;
+    hideLoading();
   }
 });
+
+function onLoadData(payload: ParsedFile): void {
+  currentData = payload;
+
+  document.getElementById('file-name')!.textContent = payload.fileName;
+
+  if (payload.truncated) {
+    document.getElementById('truncate-notice')!.textContent =
+      `Showing first ${payload.rows.length.toLocaleString()} of ${payload.totalRows.toLocaleString()} rows`;
+    document.getElementById('truncate-notice')!.classList.remove('hidden');
+  }
+
+  renderTable(payload, updateToolbar);
+  restoreReloadState(payload.headers);
+  updateToolbar();
+}
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -127,6 +166,8 @@ function highlightTableRow(rowIdx: number): void {
   scrollToRow(rowIdx);
 }
 
+let lastStartRow = -1;
+let lastEndRow = -1;
 function syncViewport(): void {
   const graphContainer = document.getElementById('graph-container')!;
   if (graphContainer.classList.contains('hidden')) return;
@@ -134,6 +175,12 @@ function syncViewport(): void {
   const rh = getRowHeight();
   const startRow = Math.floor(container.scrollTop / rh);
   const endRow = Math.ceil((container.scrollTop + container.clientHeight) / rh);
+  // 가로 스크롤은 그래프 viewport와 무관하므로, 보이는 행 범위가 실제로 변했을
+  // 때만 처리한다. (Windows에서 가로 스크롤 시 scrollTop 미세 변동으로 zoom이
+  // 리셋되는 문제 방지. macOS와 동작 통일)
+  if (startRow === lastStartRow && endRow === lastEndRow) return;
+  lastStartRow = startRow;
+  lastEndRow = endRow;
   updateViewport(startRow, endRow);
 }
 
@@ -338,6 +385,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('btn-reload')!.addEventListener('click', () => {
     saveReloadState();
+    showLoading();
     vscode.postMessage({ type: 'reload' });
   });
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);

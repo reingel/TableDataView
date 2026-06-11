@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseFile } from './csvParser';
 import { WebviewToExtensionMessage } from './types';
+import { streamParseAndSend } from './webviewStream';
 
 const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024;
 
@@ -17,6 +17,7 @@ function getNonce(): string {
 
 export class CompareViewProvider {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  private loadSeq = 0;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -55,10 +56,11 @@ export class CompareViewProvider {
     });
   }
 
-  private loadFiles(panel: vscode.WebviewPanel, uri1: vscode.Uri, uri2: vscode.Uri): void {
+  private async loadFiles(panel: vscode.WebviewPanel, uri1: vscode.Uri, uri2: vscode.Uri): Promise<void> {
+    const seq = ++this.loadSeq;
     try {
       for (const uri of [uri1, uri2]) {
-        const stat = fs.statSync(uri.fsPath);
+        const stat = await fs.promises.stat(uri.fsPath);
         if (stat.size > FILE_SIZE_WARN_BYTES) {
           vscode.window.showWarningMessage(
             `TableDataView: ${path.basename(uri.fsPath)} is ${(stat.size / 1024 / 1024).toFixed(1)} MB. Large files may render slowly.`
@@ -66,9 +68,16 @@ export class CompareViewProvider {
         }
       }
 
-      const left = parseFile(fs.readFileSync(uri1.fsPath, 'utf-8'), uri1.fsPath);
-      const right = parseFile(fs.readFileSync(uri2.fsPath, 'utf-8'), uri2.fsPath);
-      panel.webview.postMessage({ type: 'loadCompareData', left, right });
+      // Parse and stream one file at a time. streamParseAndSend keeps peak
+      // memory to a single chunk's worth and yields to the event loop between
+      // chunks, so even two large files do not block the extension host or
+      // produce a webview message larger than V8's max string length (~512 MiB).
+      let leftContent: string | null = await fs.promises.readFile(uri1.fsPath, 'utf-8');
+      await streamParseAndSend(panel, leftContent, uri1.fsPath, 'left', seq);
+      leftContent = null; // release the first file before reading the second
+
+      const rightContent = await fs.promises.readFile(uri2.fsPath, 'utf-8');
+      await streamParseAndSend(panel, rightContent, uri2.fsPath, 'right', seq);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       panel.webview.postMessage({ type: 'error', message: `Failed to read files: ${message}` });
@@ -248,6 +257,28 @@ export class CompareViewProvider {
       padding: 16px;
       color: var(--vscode-errorForeground, #f44);
     }
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: var(--vscode-editor-background);
+      color: var(--vscode-descriptionForeground, #aaa);
+    }
+    .loading-spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid var(--vscode-panel-border, #444);
+      border-top-color: var(--vscode-progressBar-background, #007acc);
+      border-radius: 50%;
+      animation: tdv-spin 0.8s linear infinite;
+    }
+    @keyframes tdv-spin { to { transform: rotate(360deg); } }
+    #loading-text { font-size: 0.95em; }
     td.crosshair-row {
       outline: 2px solid var(--vscode-focusBorder, #007acc);
       outline-offset: -2px;
@@ -355,6 +386,11 @@ export class CompareViewProvider {
         <tbody id="right-data-body"></tbody>
       </table>
     </div>
+  </div>
+
+  <div id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div id="loading-text">로딩 중...</div>
   </div>
 
   <div id="context-menu" class="hidden">

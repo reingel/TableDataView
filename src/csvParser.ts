@@ -11,7 +11,7 @@ const DELIMITER_CANDIDATES = [
   { char: ' ', weight: 0.5 },
 ];
 
-function detectDelimiter(lines: string[]): string {
+export function detectDelimiter(lines: string[]): string {
   const sample = lines.slice(0, SAMPLE_LINES);
   let bestChar = ',';
   let bestScore = -1;
@@ -45,7 +45,7 @@ function detectDelimiter(lines: string[]): string {
   return bestChar;
 }
 
-function splitLine(line: string, delimiter: string): string[] {
+export function splitLine(line: string, delimiter: string): string[] {
   if (delimiter === ' ') {
     return line.trim().split(/\s+/);
   }
@@ -84,7 +84,7 @@ function isNumeric(value: string): boolean {
   return value.trim() !== '' && !isNaN(parseFloat(value.trim()));
 }
 
-function detectHeader(firstRow: string[]): boolean {
+export function detectHeader(firstRow: string[]): boolean {
   const nonNumericCount = firstRow.filter(c => !isNumeric(c)).length;
   return nonNumericCount / firstRow.length >= 0.6;
 }
