@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseFile } from './csvParser';
 import { WebviewToExtensionMessage } from './types';
+import { streamParseAndSend } from './webviewStream';
 
 const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024;
 
@@ -17,6 +17,7 @@ function getNonce(): string {
 
 export class TableViewProvider {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  private loadSeq = 0;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -55,18 +56,21 @@ export class TableViewProvider {
     });
   }
 
-  private loadFile(panel: vscode.WebviewPanel, uri: vscode.Uri): void {
+  private async loadFile(panel: vscode.WebviewPanel, uri: vscode.Uri): Promise<void> {
+    const seq = ++this.loadSeq;
     try {
-      const stat = fs.statSync(uri.fsPath);
+      const stat = await fs.promises.stat(uri.fsPath);
       if (stat.size > FILE_SIZE_WARN_BYTES) {
         vscode.window.showWarningMessage(
           `TableDataView: File is ${(stat.size / 1024 / 1024).toFixed(1)} MB. Large files may render slowly.`
         );
       }
 
-      const content = fs.readFileSync(uri.fsPath, 'utf-8');
-      const parsed = parseFile(content, uri.fsPath);
-      panel.webview.postMessage({ type: 'loadData', payload: parsed });
+      // Async read so the extension host is not blocked while the (possibly
+      // hundreds of MB) file is loaded; streamParseAndSend then parses and
+      // streams it incrementally, yielding between chunks.
+      const content = await fs.promises.readFile(uri.fsPath, 'utf-8');
+      await streamParseAndSend(panel, content, uri.fsPath, 'single', seq);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       panel.webview.postMessage({ type: 'error', message: `Failed to read file: ${message}` });
@@ -233,6 +237,28 @@ export class TableViewProvider {
       padding: 16px;
       color: var(--vscode-errorForeground, #f44);
     }
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: var(--vscode-editor-background);
+      color: var(--vscode-descriptionForeground, #aaa);
+    }
+    .loading-spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid var(--vscode-panel-border, #444);
+      border-top-color: var(--vscode-progressBar-background, #007acc);
+      border-radius: 50%;
+      animation: tdv-spin 0.8s linear infinite;
+    }
+    @keyframes tdv-spin { to { transform: rotate(360deg); } }
+    #loading-text { font-size: 0.95em; }
     td.crosshair-row {
       outline: 2px solid var(--vscode-focusBorder, #007acc);
       outline-offset: -2px;
@@ -329,6 +355,11 @@ export class TableViewProvider {
       </thead>
       <tbody id="data-body"></tbody>
     </table>
+  </div>
+
+  <div id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div id="loading-text">로딩 중...</div>
   </div>
 
   <div id="context-menu" class="hidden">

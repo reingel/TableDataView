@@ -4,3 +4,11 @@ esbuild.js
 .gitignore
 node_modules/
 out/**/*.map
+test-data/
+.claude/
+.DS_Store
+**/.DS_Store
+*.vsix
+CLAUDE.md
+.vscode-test/
+icon128.jpg

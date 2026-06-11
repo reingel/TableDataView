@@ -1,4 +1,4 @@
-import { ExtensionToWebviewMessage, ParsedFile } from '../types';
+import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, updateViewport, setGraphDiffMode } from './graphRenderer';
 import { detectDefaultXAxis, SEQ_X } from './columnSelector';
 
@@ -904,12 +904,70 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
 
 // ---- Message handling ----
 
+// Each file is streamed as loadStart -> loadChunk* -> loadEnd (see
+// CompareViewProvider) to stay under the webview message size limit. Accumulate
+// each side's rows, then commit once BOTH sides finish for the same sequence.
+type SideAccum = { seq: number; meta: ParsedMeta; rows: string[][]; done: boolean };
+const compareAccum: { left: SideAccum | null; right: SideAccum | null } =
+  { left: null, right: null };
+
+function showLoading(): void {
+  document.getElementById('loading-overlay')?.classList.remove('hidden');
+  updateLoadingProgress();
+}
+
+function hideLoading(): void {
+  document.getElementById('loading-overlay')?.classList.add('hidden');
+}
+
+function updateLoadingProgress(): void {
+  const el = document.getElementById('loading-text');
+  if (!el) return;
+  const loaded = (compareAccum.left?.rows.length ?? 0) + (compareAccum.right?.rows.length ?? 0);
+  const total = (compareAccum.left?.meta.totalRows ?? 0) + (compareAccum.right?.meta.totalRows ?? 0);
+  el.textContent = total > 0
+    ? `로딩 중... ${loaded.toLocaleString()} / ${total.toLocaleString()} 행`
+    : '로딩 중...';
+}
+
 window.addEventListener('message', (event: MessageEvent) => {
   const msg = event.data as ExtensionToWebviewMessage;
 
-  if (msg.type === 'loadCompareData') {
-    leftData = msg.left;
-    rightData = msg.right;
+  if (msg.type === 'loadStart' && (msg.channel === 'left' || msg.channel === 'right')) {
+    compareAccum[msg.channel] = { seq: msg.seq, meta: msg.meta, rows: [], done: false };
+    showLoading();
+  } else if (msg.type === 'loadChunk' && (msg.channel === 'left' || msg.channel === 'right')) {
+    const a = compareAccum[msg.channel];
+    if (a && a.seq === msg.seq) {
+      for (let i = 0; i < msg.rows.length; i++) a.rows.push(msg.rows[i]);
+      updateLoadingProgress();
+    }
+  } else if (msg.type === 'loadEnd' && (msg.channel === 'left' || msg.channel === 'right')) {
+    const a = compareAccum[msg.channel];
+    if (a && a.seq === msg.seq) {
+      a.done = true;
+      const l = compareAccum.left;
+      const r = compareAccum.right;
+      if (l && r && l.done && r.done && l.seq === r.seq) {
+        const left: ParsedFile = { ...l.meta, rows: l.rows };
+        const right: ParsedFile = { ...r.meta, rows: r.rows };
+        compareAccum.left = null;
+        compareAccum.right = null;
+        commitCompareData(left, right);
+        hideLoading();
+      }
+    }
+  } else if (msg.type === 'error') {
+    document.getElementById('compare-wrapper')!.innerHTML =
+      `<div class="error-message">${escapeHtml(msg.message)}</div>`;
+    hideLoading();
+  }
+});
+
+function commitCompareData(left: ParsedFile, right: ParsedFile): void {
+  {
+    leftData = left;
+    rightData = right;
     displayRowCount = Math.min(leftData.rows.length, rightData.rows.length);
     buildColumnMapping(leftData.headers, rightData.headers);
 
@@ -938,11 +996,8 @@ window.addEventListener('message', (event: MessageEvent) => {
     applyHighlight('right');
     restoreCompareReloadState();
     updateToolbar();
-  } else if (msg.type === 'error') {
-    document.getElementById('compare-wrapper')!.innerHTML =
-      `<div class="error-message">${escapeHtml(msg.message)}</div>`;
   }
-});
+}
 
 
 function escapeHtml(str: string): string {
@@ -1123,6 +1178,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-reset-all')!.addEventListener('click', resetAll);
   document.getElementById('btn-reload')!.addEventListener('click', () => {
     saveCompareReloadState();
+    showLoading();
     vscode.postMessage({ type: 'reload' });
   });
 
