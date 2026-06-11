@@ -26,6 +26,26 @@ let viewportStartRow: number = 0;
 let viewportEndRow: number = 0;
 let zoomXMin: number | null = null;
 let zoomXMax: number | null = null;
+
+// Downsampled overview of the full (un-zoomed) data, drawn as a minimap in the
+// top-right corner while zoomed. Recomputed only when the underlying data
+// changes (keyed by reference), not on every pan/zoom redraw.
+type MinimapSeries = { color: string; dash: number[]; pts: { x: number; y: number }[] };
+type Minimap = { xRange: { min: number; max: number }; yRange: { min: number; max: number }; series: MinimapSeries[] };
+// Pixel rect + data mapping of a drawn minimap, so clicks/drags on it can be
+// hit-tested and translated back to an x position. Null when hidden.
+type MinimapRect = { x0: number; y0: number; w: number; h: number; pad: number; xMin: number; xMax: number };
+let currentMinimap: Minimap | null = null;
+let minimapKey: unknown[] = [];
+let minimapCache: Minimap | null = null;
+let minimapRect: MinimapRect | null = null;
+let isMinimapDrag = false;
+// Same, for the FFT pane's independent chart/zoom.
+let currentFftMinimap: Minimap | null = null;
+let fftMinimapKey: unknown[] = [];
+let fftMinimapCache: Minimap | null = null;
+let fftMinimapRect: MinimapRect | null = null;
+let isFftMinimapDrag = false;
 let isMouseDown = false;
 let isDragging = false;
 let mouseDownClientX = 0;
@@ -226,6 +246,130 @@ const viewportPlugin = {
   },
 };
 
+// Build a downsampled overview of every dataset spanning the full data range.
+function downsampleMinimap(datasets: any[]): Minimap {
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const ds of datasets) {
+    for (const pt of ds.data as DataPoint[]) {
+      if (pt.x < xmin) xmin = pt.x;
+      if (pt.x > xmax) xmax = pt.x;
+      if (pt.y < ymin) ymin = pt.y;
+      if (pt.y > ymax) ymax = pt.y;
+    }
+  }
+
+  const MM_SAMPLES = 240;
+  const series: MinimapSeries[] = datasets.map(ds => {
+    const data = ds.data as DataPoint[];
+    let pts: { x: number; y: number }[];
+    if (data.length <= MM_SAMPLES) {
+      pts = data.map(p => ({ x: p.x, y: p.y }));
+    } else {
+      const stride = Math.ceil(data.length / MM_SAMPLES);
+      pts = [];
+      for (let i = 0; i < data.length; i += stride) pts.push({ x: data[i].x, y: data[i].y });
+      const last = data[data.length - 1];
+      if (pts[pts.length - 1]?.x !== last.x) pts.push({ x: last.x, y: last.y });
+    }
+    return { color: ds.borderColor, dash: (ds.borderDash as number[]) ?? [], pts };
+  });
+
+  return { xRange: { min: xmin, max: xmax }, yRange: { min: ymin, max: ymax }, series };
+}
+
+// Cached by reference so panning/zooming (which keep the same data) reuse it.
+function getMainMinimap(datasets: any[]): Minimap {
+  const key = [lastRows, lastCols, lastRightData, lastXAxisCol, diffMode];
+  if (minimapCache && key.length === minimapKey.length && key.every((v, i) => v === minimapKey[i])) {
+    return minimapCache;
+  }
+  minimapKey = key;
+  minimapCache = downsampleMinimap(datasets);
+  return minimapCache;
+}
+
+function getFftMinimap(datasets: any[]): Minimap {
+  if (fftMinimapCache && fftMinimapKey[0] === lastFftDatasets) return fftMinimapCache;
+  fftMinimapKey = [lastFftDatasets];
+  fftMinimapCache = downsampleMinimap(datasets);
+  return fftMinimapCache;
+}
+
+// Draw a full-range overview in the chart's top-right corner with the current
+// zoom window highlighted, and return its pixel rect for hit-testing (or null).
+function drawMinimapBox(chart: any, mm: Minimap, zMin: number, zMax: number): MinimapRect | null {
+  if (mm.series.length === 0 || !isFinite(mm.xRange.min) || !isFinite(mm.yRange.min)) return null;
+  const { chartArea, ctx } = chart;
+  const margin = 8;
+  const pad = 3;
+  const w = Math.min(110, Math.max(60, (chartArea.right - chartArea.left) * 0.14));
+  const h = 28;
+  const x0 = chartArea.right - margin - w;
+  const y0 = chartArea.top + margin;
+
+  const spanX = (mm.xRange.max - mm.xRange.min) || 1;
+  const spanY = (mm.yRange.max - mm.yRange.min) || 1;
+  const mapX = (x: number) => x0 + pad + (x - mm.xRange.min) / spanX * (w - 2 * pad);
+  const mapY = (y: number) => y0 + pad + (1 - (y - mm.yRange.min) / spanY) * (h - 2 * pad);
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(20,20,20,0.78)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.fillRect(x0, y0, w, h);
+  ctx.strokeRect(x0, y0, w, h);
+
+  ctx.beginPath();
+  ctx.rect(x0, y0, w, h);
+  ctx.clip();
+
+  for (const s of mm.series) {
+    if (s.pts.length < 2) continue;
+    ctx.beginPath();
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(s.dash.length ? [2, 2] : []);
+    for (let i = 0; i < s.pts.length; i++) {
+      const px = mapX(s.pts[i].x);
+      const py = mapY(s.pts[i].y);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  const clamp = (x: number) => Math.max(mm.xRange.min, Math.min(mm.xRange.max, x));
+  const wx1 = mapX(clamp(zMin));
+  const wx2 = mapX(clamp(zMax));
+  ctx.fillStyle = 'rgba(100,150,255,0.25)';
+  ctx.fillRect(wx1, y0 + pad, Math.max(1, wx2 - wx1), h - 2 * pad);
+  ctx.strokeStyle = 'rgba(120,170,255,0.95)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(wx1, y0 + pad, Math.max(1, wx2 - wx1), h - 2 * pad);
+  ctx.restore();
+
+  return { x0, y0, w, h, pad, xMin: mm.xRange.min, xMax: mm.xRange.max };
+}
+
+// Top-right minimap shown only while zoomed, so the user keeps spatial context.
+const minimapPlugin = {
+  id: 'minimap',
+  afterDraw(chart: any) {
+    minimapRect = (zoomXMin !== null && zoomXMax !== null && currentMinimap)
+      ? drawMinimapBox(chart, currentMinimap, zoomXMin, zoomXMax)
+      : null;
+  },
+};
+
+const fftMinimapPlugin = {
+  id: 'fftMinimap',
+  afterDraw(chart: any) {
+    fftMinimapRect = (fftZoomXMin !== null && fftZoomXMax !== null && currentFftMinimap)
+      ? drawMinimapBox(chart, currentFftMinimap, fftZoomXMin, fftZoomXMax)
+      : null;
+  },
+};
+
 const crosshairPlugin = {
   id: 'crosshairLine',
   afterDraw(chart: any) {
@@ -423,8 +567,45 @@ function getCanvasPixelX(e: MouseEvent): number {
   return e.clientX - canvas.getBoundingClientRect().left;
 }
 
+function getCanvasPixelY(e: MouseEvent): number {
+  const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
+  return e.clientY - canvas.getBoundingClientRect().top;
+}
+
+function isOverMinimap(px: number, py: number): boolean {
+  const r = minimapRect;
+  return !!r && px >= r.x0 && px <= r.x0 + r.w && py >= r.y0 && py <= r.y0 + r.h;
+}
+
+// Given a click x-pixel within a minimap rect, recenter a zoom window of the
+// given span on that position, clamped to the minimap's data range.
+function minimapPanRange(r: MinimapRect, span: number, px: number): { min: number; max: number } {
+  const inner = r.w - 2 * r.pad;
+  const t = Math.max(0, Math.min(1, (px - (r.x0 + r.pad)) / inner));
+  const clickedX = r.xMin + t * (r.xMax - r.xMin);
+  let min = clickedX - span / 2;
+  let max = clickedX + span / 2;
+  if (min < r.xMin) { max += r.xMin - min; min = r.xMin; }
+  if (max > r.xMax) { min -= max - r.xMax; max = r.xMax; }
+  return { min, max };
+}
+
+function panToMinimapX(px: number): void {
+  if (!minimapRect || zoomXMin === null || zoomXMax === null) return;
+  const { min, max } = minimapPanRange(minimapRect, zoomXMax - zoomXMin, px);
+  zoomXMin = min;
+  zoomXMax = max;
+  redraw();
+}
+
 function handleMouseDown(e: MouseEvent): void {
   const isCtrlCmd = e.ctrlKey || e.metaKey;
+  if (e.button === 0 && !isCtrlCmd && isOverMinimap(getCanvasPixelX(e), getCanvasPixelY(e))) {
+    isMinimapDrag = true;
+    panToMinimapX(getCanvasPixelX(e));
+    e.preventDefault();
+    return;
+  }
   if (e.button === 2 || (e.button === 0 && isCtrlCmd)) {
     isPanDown = true;
     panLastPixel = getCanvasPixelX(e);
@@ -443,6 +624,14 @@ function handleMouseDown(e: MouseEvent): void {
 }
 
 function handleMouseMove(e: MouseEvent): void {
+  if (isMinimapDrag) {
+    panToMinimapX(getCanvasPixelX(e));
+    return;
+  }
+  if (!isMouseDown && !isPanDown) {
+    const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
+    canvas.style.cursor = isOverMinimap(getCanvasPixelX(e), getCanvasPixelY(e)) ? 'pointer' : '';
+  }
   if (isPanDown && chartInstance) {
     const currentPixel = getCanvasPixelX(e);
     if (!panIsDragging && Math.abs(e.clientX - panStartClientX) > DRAG_THRESHOLD) {
@@ -473,6 +662,10 @@ function handleMouseMove(e: MouseEvent): void {
 }
 
 function handleMouseUp(e: MouseEvent): void {
+  if (isMinimapDrag) {
+    isMinimapDrag = false;
+    return;
+  }
   const isCtrlCmd = e.ctrlKey || e.metaKey;
   if (e.button === 2 || (e.button === 0 && isCtrlCmd)) {
     if (e.button === 2 && isPanDown && !panIsDragging) {
@@ -628,7 +821,31 @@ function getFftCanvasPixelX(e: MouseEvent): number {
   return e.clientX - canvas.getBoundingClientRect().left;
 }
 
+function getFftCanvasPixelY(e: MouseEvent): number {
+  const canvas = document.getElementById('fft-canvas') as HTMLCanvasElement;
+  return e.clientY - canvas.getBoundingClientRect().top;
+}
+
+function isOverFftMinimap(px: number, py: number): boolean {
+  const r = fftMinimapRect;
+  return !!r && px >= r.x0 && px <= r.x0 + r.w && py >= r.y0 && py <= r.y0 + r.h;
+}
+
+function panFftToMinimapX(px: number): void {
+  if (!fftMinimapRect || fftZoomXMin === null || fftZoomXMax === null) return;
+  const { min, max } = minimapPanRange(fftMinimapRect, fftZoomXMax - fftZoomXMin, px);
+  fftZoomXMin = min;
+  fftZoomXMax = max;
+  redrawFFT();
+}
+
 function handleFftMouseDown(e: MouseEvent): void {
+  if (e.button === 0 && isOverFftMinimap(getFftCanvasPixelX(e), getFftCanvasPixelY(e))) {
+    isFftMinimapDrag = true;
+    panFftToMinimapX(getFftCanvasPixelX(e));
+    e.preventDefault();
+    return;
+  }
   if (e.button === 2) {
     fftIsPanDown = true;
     fftPanLastPixel = getFftCanvasPixelX(e);
@@ -644,6 +861,14 @@ function handleFftMouseDown(e: MouseEvent): void {
 }
 
 function handleFftMouseMove(e: MouseEvent): void {
+  if (isFftMinimapDrag) {
+    panFftToMinimapX(getFftCanvasPixelX(e));
+    return;
+  }
+  if (!fftIsMouseDown && !fftIsPanDown) {
+    const canvas = document.getElementById('fft-canvas') as HTMLCanvasElement;
+    if (canvas) canvas.style.cursor = isOverFftMinimap(getFftCanvasPixelX(e), getFftCanvasPixelY(e)) ? 'pointer' : '';
+  }
   if (fftIsPanDown && fftChartInstance) {
     const currentPixel = getFftCanvasPixelX(e);
     const delta = currentPixel - fftPanLastPixel;
@@ -669,6 +894,7 @@ function handleFftMouseMove(e: MouseEvent): void {
 }
 
 function handleFftMouseUp(e: MouseEvent): void {
+  if (isFftMinimapDrag) { isFftMinimapDrag = false; return; }
   if (e.button === 2) { fftIsPanDown = false; return; }
   if (!fftIsMouseDown || e.button !== 0) return;
   fftIsMouseDown = false;
@@ -733,6 +959,7 @@ function redrawFFT(): void {
     borderWidth: lineWidth,
     pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
   }));
+  currentFftMinimap = fftZoomXMin === null ? null : getFftMinimap(datasets);
   fftChartInstance = new Chart(fftCanvas.getContext('2d')!, {
     type: 'scatter',
     data: { datasets },
@@ -757,7 +984,7 @@ function redrawFFT(): void {
         },
       },
     },
-    plugins: [fftDragSelectPlugin, fftCrosshairPlugin],
+    plugins: [fftDragSelectPlugin, fftCrosshairPlugin, fftMinimapPlugin],
   });
   updateFftYValues();
 }
@@ -870,6 +1097,7 @@ function redraw(): void {
   const datasets = buildDatasets();
   const yRange = computeYRange(datasets);
   const xRange = zoomXMin === null ? computeXRange(datasets) : null;
+  currentMinimap = zoomXMin === null ? null : getMainMinimap(datasets);
 
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
 
@@ -904,7 +1132,7 @@ function redraw(): void {
         },
       },
     },
-    plugins: [viewportPlugin, zeroLinePlugin, crosshairPlugin, dragSelectPlugin],
+    plugins: [viewportPlugin, zeroLinePlugin, crosshairPlugin, dragSelectPlugin, minimapPlugin],
   });
 
   updateYValues();
