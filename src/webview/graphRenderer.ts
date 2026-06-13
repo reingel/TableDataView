@@ -73,6 +73,18 @@ let fftDragCurrentPixel = 0;
 let fftIsPanDown = false;
 let fftPanLastPixel = 0;
 let fftCanvasListenerAdded = false;
+// Debounce FFT recompute so continuous pan/zoom of the time graph doesn't
+// rebuild the (relatively expensive) FFT on every frame.
+let fftRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleFftRefresh(): void {
+  if (!isFFTPaneVisible()) return;
+  if (fftRefreshTimer !== null) clearTimeout(fftRefreshTimer);
+  fftRefreshTimer = setTimeout(() => {
+    fftRefreshTimer = null;
+    renderFFTPaneFromGraph();
+  }, 120);
+}
 
 export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
@@ -1136,6 +1148,8 @@ function redraw(): void {
   });
 
   updateYValues();
+  // Keep the FFT pane in sync with the time graph's visible region.
+  scheduleFftRefresh();
 }
 
 export function goHome(): void {
@@ -1270,9 +1284,23 @@ export function renderFFTPane(
 }
 
 export function renderFFTPaneFromGraph(): void {
+  if (fftRefreshTimer !== null) { clearTimeout(fftRefreshTimer); fftRefreshTimer = null; }
   const dataCols = getDataCols();
   if (dataCols.length === 0) return;
-  renderFFTPane(lastHeaders, lastRows, dataCols, lastXAxisCol);
+
+  // FFT operates only on the data currently visible in the time graph, i.e. the
+  // rows whose x-value falls inside the active zoom window. With no zoom the
+  // whole signal is visible and used.
+  let rows = displayRows;
+  if (zoomXMin !== null && zoomXMax !== null) {
+    const useColAsX = lastCols.includes(lastXAxisCol);
+    rows = displayRows.filter((row, i) => {
+      const x = useColAsX ? parseFloat(row[lastXAxisCol]) : rowIndexMap[i] + 1;
+      return isFinite(x) && x >= zoomXMin! && x <= zoomXMax!;
+    });
+  }
+
+  renderFFTPane(lastHeaders, rows, dataCols, lastXAxisCol);
 }
 
 export function isFFTPaneVisible(): boolean {
