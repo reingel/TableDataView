@@ -1183,10 +1183,12 @@ function renderColSearchList(): void {
 
 function updateColSearch(): void {
   const input = document.getElementById('col-search-input') as HTMLInputElement;
-  const q = input.value.trim().toLowerCase();
+  // Space-separated terms are ANDed: "abc def" matches headers containing both.
+  const tokens = input.value.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  const matchHeader = (h: string) => { const hl = h.toLowerCase(); return tokens.every(t => hl.includes(t)); };
   colSearchMatches = [];
-  leftData?.headers.forEach((h, i) => { if (h.toLowerCase().includes(q)) colSearchMatches.push({ side: 'left', col: i }); });
-  rightData?.headers.forEach((h, i) => { if (h.toLowerCase().includes(q)) colSearchMatches.push({ side: 'right', col: i }); });
+  leftData?.headers.forEach((h, i) => { if (matchHeader(h)) colSearchMatches.push({ side: 'left', col: i }); });
+  rightData?.headers.forEach((h, i) => { if (matchHeader(h)) colSearchMatches.push({ side: 'right', col: i }); });
   colSearchSel = 0;
   renderColSearchList();
 }

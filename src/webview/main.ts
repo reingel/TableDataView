@@ -328,11 +328,13 @@ function renderColSearchList(): void {
 
 function updateColSearch(): void {
   const input = document.getElementById('col-search-input') as HTMLInputElement;
-  const q = input.value.trim().toLowerCase();
+  // Space-separated terms are ANDed: "abc def" matches headers containing both.
+  const tokens = input.value.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
   colSearchMatches = [];
   if (currentData) {
     currentData.headers.forEach((h, i) => {
-      if (h.toLowerCase().includes(q)) colSearchMatches.push(i);
+      const hl = h.toLowerCase();
+      if (tokens.every(t => hl.includes(t))) colSearchMatches.push(i);
     });
   }
   colSearchSel = 0;
