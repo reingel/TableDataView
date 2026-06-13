@@ -192,12 +192,16 @@ function computeColumnWidths(data: ParsedFile): number[] {
   for (let i = Math.max(head, n - 120); i < n; i++) sampleIdx.push(i);
 
   return data.headers.map((h, col) => {
-    let max = ctx.measureText(h ?? '').width;
+    // The header must always be fully visible, so its width is a hard lower
+    // bound (not subject to COL_MAX_W). Only the data-driven width is capped.
+    const headerW = Math.ceil(ctx.measureText(h ?? '').width) + COL_PAD;
+    let dataMax = 0;
     for (const i of sampleIdx) {
       const v = data.rows[i]?.[col];
-      if (v) { const w = ctx.measureText(v).width; if (w > max) max = w; }
+      if (v) { const w = ctx.measureText(v).width; if (w > dataMax) dataMax = w; }
     }
-    return Math.min(COL_MAX_W, Math.max(COL_MIN_W, Math.ceil(max) + COL_PAD));
+    const dataW = Math.min(COL_MAX_W, Math.ceil(dataMax) + COL_PAD);
+    return Math.max(COL_MIN_W, headerW, dataW);
   });
 }
 
