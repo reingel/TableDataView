@@ -213,12 +213,21 @@ function updateToolbar(): void {
   if (!graphContainer.classList.contains('hidden') && leftData && rightData) {
     renderGraph(
       leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
-      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right }
+      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
+      isXAxisOriginal('left')
     );
   }
 }
 
 // ---- Value computation ----
+
+// The x-axis column is "original" only when its values haven't been transformed
+// (numerical diff / moving average). A transformed x-axis distorts the graph, so
+// the renderer falls back to the row index in that case.
+function isXAxisOriginal(side: Side): boolean {
+  const xCol = xAxisCol[side];
+  return !diffCols[side].has(xCol) && !movAvgCols[side].has(xCol);
+}
 
 function getDiffValue(side: Side, rowIdx: number, colIdx: number): string {
   const data = side === 'left' ? leftData : rightData;
@@ -1441,7 +1450,8 @@ document.addEventListener('DOMContentLoaded', () => {
     resetCrosshairs();
     renderGraph(
       leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
-      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right }
+      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
+      isXAxisOriginal('left')
     );
     syncViewport();
   });

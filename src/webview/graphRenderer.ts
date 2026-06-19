@@ -21,7 +21,19 @@ let rowIndexMap: number[] = [];
 let rowHighlightCallback: ((rowIdx: number) => void) | null = null;
 let canvasListenerAdded = false;
 let lastXAxisCol: number = 0;
-let lastRightData: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number } | undefined;
+// When the x-axis column's values have been transformed (numerical diff, moving
+// average, ...), using them as the x coordinate produces a distorted graph, so
+// we fall back to the row index instead. This tracks whether the x-axis column
+// still holds its original values.
+let lastXAxisIsOriginal: boolean = true;
+let lastRightData: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number; xAxisIsOriginal?: boolean } | undefined;
+
+// Use the x-axis column's values as the x coordinate only when that column is
+// among the plotted columns AND it still holds its original (untransformed)
+// values; otherwise plot against the row index.
+function colUsedAsX(): boolean {
+  return lastCols.includes(lastXAxisCol) && lastXAxisIsOriginal;
+}
 let viewportStartRow: number = 0;
 let viewportEndRow: number = 0;
 let zoomXMin: number | null = null;
@@ -102,7 +114,7 @@ export function setExtraYValuesCallback(fn: (() => string) | null): void {
 
 export function setCrosshairToRow(rowIdx: number): void {
   if (!chartInstance || lastRows.length === 0) return;
-  const useColAsX = lastCols.includes(lastXAxisCol);
+  const useColAsX = colUsedAsX();
   const dispIdx = rowIndexMap.indexOf(rowIdx);
   const idx = dispIdx >= 0 ? dispIdx : rowIdx;
   const xVal = useColAsX
@@ -135,7 +147,7 @@ function buildSegments(rows: string[][], xAxisCol: number, colIdx: number, useCo
 }
 
 function buildDatasets(): any[] {
-  const useColAsX = lastCols.includes(lastXAxisCol);
+  const useColAsX = colUsedAsX();
   const dataCols = getDataCols();
   const result: any[] = [];
 
@@ -198,7 +210,7 @@ function buildDatasets(): any[] {
 
   if (lastRightData) {
     const rd = lastRightData;
-    const useRightColAsX = rd.selectedCols.includes(rd.xAxisCol);
+    const useRightColAsX = rd.selectedCols.includes(rd.xAxisCol) && (rd.xAxisIsOriginal ?? true);
     const rightDataCols = rd.selectedCols.includes(rd.xAxisCol)
       ? rd.selectedCols.filter(c => c !== rd.xAxisCol)
       : rd.selectedCols;
@@ -234,7 +246,7 @@ const viewportPlugin = {
   afterDraw(chart: any) {
     if (displayRows.length === 0 || !chart.scales.x) return;
     const xScale = chart.scales.x;
-    const useColAsX = lastCols.includes(lastXAxisCol);
+    const useColAsX = colUsedAsX();
     const totalRows = lastRows.length;
     const dispLen = displayRows.length;
     const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
@@ -484,7 +496,7 @@ function updateYValues(): void {
     updateHideCrosshairButton();
     return;
   }
-  const useColAsX = lastCols.includes(lastXAxisCol);
+  const useColAsX = colUsedAsX();
   const dataCols = getDataCols();
   const rd = lastRightData;
   const rightCols = getRightDataCols();
@@ -1027,7 +1039,8 @@ export function hideCrosshairs(): void {
 
 export function renderGraph(
   headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0,
-  rightData?: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number }
+  rightData?: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number; xAxisIsOriginal?: boolean },
+  xAxisIsOriginal: boolean = true
 ): void {
   if (xAxisCol !== lastXAxisCol) {
     zoomXMin = null;
@@ -1038,6 +1051,7 @@ export function renderGraph(
   lastRows = rows;
   lastCols = selectedCols;
   lastXAxisCol = xAxisCol;
+  lastXAxisIsOriginal = xAxisIsOriginal;
   lastRightData = rightData;
 
   displayRows = rows;
@@ -1103,7 +1117,7 @@ const zeroLinePlugin = {
 };
 
 function redraw(): void {
-  const useColAsX = lastCols.includes(lastXAxisCol);
+  const useColAsX = colUsedAsX();
   const xLabel = useColAsX ? lastHeaders[lastXAxisCol] : 'Row';
   const dataCols = getDataCols();
   const datasets = buildDatasets();
@@ -1168,7 +1182,7 @@ export function updateViewport(startRow: number, endRow: number): void {
     const totalRows = lastRows.length;
     const dispLen = displayRows.length;
     const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
-    const useColAsX = lastCols.includes(lastXAxisCol);
+    const useColAsX = colUsedAsX();
     const toXData = (i: number) => useColAsX
       ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
       : (rowIndexMap[i] + 1);
@@ -1293,14 +1307,17 @@ export function renderFFTPaneFromGraph(): void {
   // whole signal is visible and used.
   let rows = displayRows;
   if (zoomXMin !== null && zoomXMax !== null) {
-    const useColAsX = lastCols.includes(lastXAxisCol);
+    const useColAsX = colUsedAsX();
     rows = displayRows.filter((row, i) => {
       const x = useColAsX ? parseFloat(row[lastXAxisCol]) : rowIndexMap[i] + 1;
       return isFinite(x) && x >= zoomXMin! && x <= zoomXMax!;
     });
   }
 
-  renderFFTPane(lastHeaders, rows, dataCols, lastXAxisCol);
+  // When the x-axis column isn't used as x (not selected or transformed), the
+  // signal is index-sampled, so derive the FFT sample rate from the index too
+  // (xAxisCol = -1 -> no usable x values -> sample rate defaults to 1).
+  renderFFTPane(lastHeaders, rows, dataCols, colUsedAsX() ? lastXAxisCol : -1);
 }
 
 export function isFFTPaneVisible(): boolean {

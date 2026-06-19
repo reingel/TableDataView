@@ -52,7 +52,7 @@ function updateToolbar(): void {
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
-    renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
+    renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol(), undefined, isXAxisOriginal());
     if (isFFTPaneVisible()) renderFFTPaneFromGraph();
   }
 }
@@ -62,6 +62,14 @@ function navigateToRow(rowIdx: number): void {
   scrollToRow(rowIdx);
   const gc = document.getElementById('graph-container')!;
   if (!gc.classList.contains('hidden')) setCrosshairToRow(rowIdx);
+}
+
+// The x-axis column is "original" only when its values haven't been transformed
+// (numerical diff / moving average). A transformed x-axis distorts the graph, so
+// the renderer falls back to the row index in that case.
+function isXAxisOriginal(): boolean {
+  const xCol = getXAxisCol();
+  return !isDiff(xCol) && getMovAvgWindowSize(xCol) === undefined;
 }
 
 function getEffectiveValue(rowIdx: number, colIdx: number): string {
@@ -91,7 +99,7 @@ function handleShowGraph(): void {
   if (selected.length === 0) return;
   resetZoom();
   resetCrosshairs();
-  renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol());
+  renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol(), undefined, isXAxisOriginal());
   syncViewport();
 }
 
