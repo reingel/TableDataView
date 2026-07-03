@@ -133,18 +133,28 @@ export class CompareViewProvider {
     }
     .toolbar-sep { width: 1px; height: 16px; background: var(--vscode-panel-border); margin: 0 2px; }
     button {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none;
-      padding: 2px 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: transparent;
+      color: var(--vscode-foreground);
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      padding: 3px 12px;
       cursor: pointer;
       font-size: 0.9em;
-      border-radius: 2px;
+      border-radius: 6px;
+      transition: background 0.12s, color 0.12s;
     }
-    button:hover { background: var(--vscode-button-hoverBackground); }
+    button:hover { background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.06)); }
     button:disabled { opacity: 0.4; cursor: default; }
+    button.active {
+      border-color: var(--vscode-focusBorder, #007acc);
+      background: var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.2));
+      color: var(--vscode-focusBorder, #007acc);
+    }
     #btn-reset-all {
       margin-left: 14px;
+      border-color: var(--vscode-inputValidation-warningBorder, #b87000);
       background: var(--vscode-inputValidation-warningBackground, #6b3600);
       color: var(--vscode-inputValidation-warningForeground, #fff);
     }
@@ -325,8 +335,9 @@ export class CompareViewProvider {
       font-family: inherit;
       font-size: 1em;
     }
-    #col-search-list { list-style: none; margin: 0; padding: 4px 0; max-height: 320px; overflow-y: auto; }
-    #col-search-list li {
+    #col-search-list { max-height: 320px; overflow-y: auto; }
+    .col-list { list-style: none; margin: 0; padding: 4px 0; }
+    .col-list li {
       display: flex;
       gap: 8px;
       align-items: baseline;
@@ -335,14 +346,42 @@ export class CompareViewProvider {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      user-select: none;
     }
-    #col-search-list li .col-side { font-size: 0.8em; font-weight: bold; min-width: 1.4em; }
-    #col-search-list li .col-side.left { color: #4bc0c0; }
-    #col-search-list li .col-side.right { color: #ff9f40; }
-    #col-search-list li .col-num { color: var(--vscode-descriptionForeground, #888); font-size: 0.85em; min-width: 2.6em; text-align: right; }
-    #col-search-list li:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08)); }
-    #col-search-list li.selected { background: var(--vscode-list-activeSelectionBackground, #094771); color: var(--vscode-list-activeSelectionForeground, #fff); }
+    .col-list li .col-side { font-size: 0.8em; font-weight: bold; min-width: 1.1em; }
+    .col-list li .col-side.left { color: #4bc0c0; }
+    .col-list li .col-side.right { color: #ff9f40; }
+    .col-list li .col-num { color: var(--vscode-descriptionForeground, #888); font-size: 0.85em; min-width: 1.8em; text-align: left; }
+    .col-list li .col-name { overflow: hidden; text-overflow: ellipsis; }
+    .col-list li:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08)); }
+    .col-list li.selected { background: var(--vscode-list-activeSelectionBackground, #094771); color: var(--vscode-list-activeSelectionForeground, #fff); }
+    .col-list li.x-axis { color: #ff8c00; font-weight: bold; }
     #col-search-empty { padding: 6px 10px; color: var(--vscode-descriptionForeground, #888); font-style: italic; }
+    #main-row {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      min-height: 0;
+    }
+    #header-panel {
+      width: fit-content;
+      min-width: 140px;
+      max-width: 50vw;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--vscode-editorWidget-background, #252526);
+      border-left: 1px solid var(--vscode-panel-border, #444);
+    }
+    #header-panel-title {
+      padding: 8px 10px;
+      font-weight: bold;
+      font-size: 0.85em;
+      color: var(--vscode-descriptionForeground, #aaa);
+      border-bottom: 1px solid var(--vscode-panel-border, #444);
+      flex-shrink: 0;
+    }
+    #header-panel-list { flex: 1; overflow-y: auto; }
     @keyframes tdv-col-flash {
       from { box-shadow: inset 0 0 0 9999px rgba(255,200,50,0.55); }
       to   { box-shadow: inset 0 0 0 9999px rgba(255,200,50,0); }
@@ -432,28 +471,37 @@ export class CompareViewProvider {
     <span class="compare-sep">↔</span>
     <span id="right-file-name" class="file-name"></span>
     <span id="truncate-notice" class="hidden"></span>
-    <button id="btn-reload" style="margin-left:auto;">Reload</button>
+    <button id="btn-swap" title="Swap left and right files" style="margin-left:auto;">&#x21c4; Swap</button>
+    <button id="btn-reload">&#x21bb; Reload</button>
+    <button id="btn-toggle-header" title="Show column list">&#x2630; Header</button>
   </div>
 
-  <div id="compare-wrapper">
-    <div id="left-pane" class="pane">
-      <table id="left-table">
-        <thead>
-          <tr id="left-col-index-row" class="col-index-row"></tr>
-          <tr id="left-header-row" class="header-row"></tr>
-        </thead>
-        <tbody id="left-data-body"></tbody>
-      </table>
+  <div id="main-row">
+    <div id="compare-wrapper">
+      <div id="left-pane" class="pane">
+        <table id="left-table">
+          <thead>
+            <tr id="left-col-index-row" class="col-index-row"></tr>
+            <tr id="left-header-row" class="header-row"></tr>
+          </thead>
+          <tbody id="left-data-body"></tbody>
+        </table>
+      </div>
+      <div id="pane-divider"></div>
+      <div id="right-pane" class="pane">
+        <table id="right-table">
+          <thead>
+            <tr id="right-col-index-row" class="col-index-row"></tr>
+            <tr id="right-header-row" class="header-row"></tr>
+          </thead>
+          <tbody id="right-data-body"></tbody>
+        </table>
+      </div>
     </div>
-    <div id="pane-divider"></div>
-    <div id="right-pane" class="pane">
-      <table id="right-table">
-        <thead>
-          <tr id="right-col-index-row" class="col-index-row"></tr>
-          <tr id="right-header-row" class="header-row"></tr>
-        </thead>
-        <tbody id="right-data-body"></tbody>
-      </table>
+
+    <div id="header-panel" class="hidden">
+      <div id="header-panel-title">Columns</div>
+      <ul id="header-panel-list" class="col-list"></ul>
     </div>
   </div>
 
@@ -466,7 +514,7 @@ export class CompareViewProvider {
 
   <div id="col-search" class="hidden">
     <input id="col-search-input" type="text" autocomplete="off" spellcheck="false" placeholder="Go to column…" />
-    <ul id="col-search-list"></ul>
+    <ul id="col-search-list" class="col-list"></ul>
   </div>
 
   <div id="context-menu" class="hidden">

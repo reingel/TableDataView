@@ -209,6 +209,8 @@ function updateToolbar(): void {
     hexCols.left.size > 0 || hexCols.right.size > 0;
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
 
+  updateHeaderPanelSelection();
+
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && leftData && rightData) {
     renderGraph(
@@ -378,6 +380,26 @@ function renderBody(side: Side): void {
 
 let lastClickedCol: Record<Side, number | null> = { left: null, right: null };
 
+function selectSingleColumn(side: Side, colIdx: number): void {
+  const other = otherSide(side);
+  const mappedIdx = getMappedCol(side, colIdx);
+  selectedCols.left.clear();
+  selectedCols.right.clear();
+  selectedCols[side].add(colIdx);
+  if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
+}
+
+function finishColumnSelection(side: Side, colIdx: number): void {
+  // Always keep x-axis col selected (skip the sequence-number sentinel)
+  if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
+  if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
+
+  lastClickedCol[side] = colIdx;
+  applyHighlight('left');
+  applyHighlight('right');
+  updateToolbar();
+}
+
 function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void {
   const other = otherSide(side);
   const mappedIdx = getMappedCol(side, colIdx);
@@ -399,20 +421,10 @@ function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void 
       if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
     }
   } else {
-    selectedCols.left.clear();
-    selectedCols.right.clear();
-    selectedCols[side].add(colIdx);
-    if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
+    selectSingleColumn(side, colIdx);
   }
 
-  // Always keep x-axis col selected (skip the sequence-number sentinel)
-  if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
-  if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
-
-  lastClickedCol[side] = colIdx;
-  applyHighlight('left');
-  applyHighlight('right');
-  updateToolbar();
+  finishColumnSelection(side, colIdx);
 }
 
 function applyHighlight(side: Side): void {
@@ -722,6 +734,8 @@ function computeColumnWidths(data: ParsedFile): number[] {
   const ctx = measureCanvas.getContext('2d')!;
   const cs = getComputedStyle(document.body);
   ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+  const normalFont = ctx.font;
+  const boldFont = `bold ${cs.fontSize} ${cs.fontFamily}`;
 
   const n = data.rows.length;
   const sampleIdx: number[] = [];
@@ -732,7 +746,13 @@ function computeColumnWidths(data: ParsedFile): number[] {
   return data.headers.map((h, col) => {
     // The header must always be fully visible, so its width is a hard lower
     // bound (not subject to COL_MAX_W). Only the data-driven width is capped.
-    const headerW = Math.ceil(ctx.measureText(h ?? '').width) + COL_PAD;
+    // Selected headers render bold (th.selected), which is wider than the
+    // regular font, so measure both and take the larger.
+    ctx.font = boldFont;
+    const headerWBold = ctx.measureText(h ?? '').width;
+    ctx.font = normalFont;
+    const headerWNormal = ctx.measureText(h ?? '').width;
+    const headerW = Math.ceil(Math.max(headerWBold, headerWNormal)) + COL_PAD;
     let dataMax = 0;
     for (const i of sampleIdx) {
       const v = data.rows[i]?.[col];
@@ -1023,6 +1043,55 @@ window.addEventListener('message', (event: MessageEvent) => {
   }
 });
 
+function updateFileLabels(): void {
+  if (!leftData || !rightData) return;
+  const lPath = leftData.filePath ?? leftData.fileName;
+  const rPath = rightData.filePath ?? rightData.fileName;
+  const sep = lPath.includes('/') ? '/' : '\\';
+  const lParts = lPath.split(sep);
+  const rParts = rPath.split(sep);
+  let common = 0;
+  while (common < lParts.length - 1 && common < rParts.length - 1 && lParts[common] === rParts[common]) common++;
+  document.getElementById('left-file-name')!.textContent = lParts.slice(common).join(sep);
+  document.getElementById('right-file-name')!.textContent = rParts.slice(common).join(sep);
+
+  if (leftData.truncated || rightData.truncated || leftData.rows.length !== rightData.rows.length) {
+    document.getElementById('truncate-notice')!.textContent =
+      `Comparing ${displayRowCount.toLocaleString()} rows (of ${leftData.rows.length.toLocaleString()} / ${rightData.rows.length.toLocaleString()})`;
+    document.getElementById('truncate-notice')!.classList.remove('hidden');
+  } else {
+    document.getElementById('truncate-notice')!.classList.add('hidden');
+  }
+}
+
+// Swap which side (left/right) each loaded file is displayed on, along with
+// all per-side view state (selection, x-axis, diff/movavg/hex, column widths).
+function swapSides(): void {
+  if (!leftData || !rightData) return;
+
+  [leftData, rightData] = [rightData, leftData];
+  [selectedCols.left, selectedCols.right] = [selectedCols.right, selectedCols.left];
+  [xAxisCol.left, xAxisCol.right] = [xAxisCol.right, xAxisCol.left];
+  [defaultXAxisCol.left, defaultXAxisCol.right] = [defaultXAxisCol.right, defaultXAxisCol.left];
+  [diffCols.left, diffCols.right] = [diffCols.right, diffCols.left];
+  [movAvgCols.left, movAvgCols.right] = [movAvgCols.right, movAvgCols.left];
+  [hexCols.left, hexCols.right] = [hexCols.right, hexCols.left];
+  [colWidths.left, colWidths.right] = [colWidths.right, colWidths.left];
+  [lastClickedCol.left, lastClickedCol.right] = [lastClickedCol.right, lastClickedCol.left];
+
+  buildColumnMapping(leftData.headers, rightData.headers);
+  computeDiffColumns();
+  updateFileLabels();
+
+  initPane('left', leftData);
+  initPane('right', rightData);
+  applyHighlight('left');
+  applyHighlight('right');
+  renderHeaderPanel();
+  scheduleRender();
+  updateToolbar();
+}
+
 function commitCompareData(left: ParsedFile, right: ParsedFile): void {
   {
     leftData = left;
@@ -1030,23 +1099,7 @@ function commitCompareData(left: ParsedFile, right: ParsedFile): void {
     displayRowCount = Math.min(leftData.rows.length, rightData.rows.length);
     buildColumnMapping(leftData.headers, rightData.headers);
 
-    const lPath = leftData.filePath ?? leftData.fileName;
-    const rPath = rightData.filePath ?? rightData.fileName;
-    const sep = lPath.includes('/') ? '/' : '\\';
-    const lParts = lPath.split(sep);
-    const rParts = rPath.split(sep);
-    let common = 0;
-    while (common < lParts.length - 1 && common < rParts.length - 1 && lParts[common] === rParts[common]) common++;
-    document.getElementById('left-file-name')!.textContent = lParts.slice(common).join(sep);
-    document.getElementById('right-file-name')!.textContent = rParts.slice(common).join(sep);
-
-    const maxRows = Math.max(leftData.rows.length, rightData.rows.length);
-    if (leftData.truncated || rightData.truncated || leftData.rows.length !== rightData.rows.length) {
-      document.getElementById('truncate-notice')!.textContent =
-        `Comparing ${displayRowCount.toLocaleString()} rows (of ${leftData.rows.length.toLocaleString()} / ${rightData.rows.length.toLocaleString()})`;
-      document.getElementById('truncate-notice')!.classList.remove('hidden');
-    }
-    void maxRows;
+    updateFileLabels();
 
     computeDiffColumns();
 
@@ -1064,6 +1117,7 @@ function commitCompareData(left: ParsedFile, right: ParsedFile): void {
     applyHighlight('left');
     applyHighlight('right');
     restoreCompareReloadState();
+    renderHeaderPanel();
     updateToolbar();
   }
 }
@@ -1158,6 +1212,79 @@ function gotoCompareColumn(side: Side, col: number): void {
 
   flashColumn(side, col);
   if (otherCol !== undefined) flashColumn(other, otherCol);
+}
+
+// ---- Header panel (column list) ----
+
+let headerPanelOpen = false;
+
+function renderHeaderPanel(): void {
+  const list = document.getElementById('header-panel-list')!;
+  list.innerHTML = '';
+  const addRows = (side: Side, headers: string[] | undefined, skip?: (i: number) => boolean) => {
+    headers?.forEach((h, i) => {
+      if (skip?.(i)) return;
+      const li = document.createElement('li');
+      li.dataset.side = side;
+      li.dataset.col = String(i);
+      const tag = document.createElement('span');
+      tag.className = `col-side ${side}`;
+      tag.textContent = side === 'left' ? 'L' : 'R';
+      const num = document.createElement('span');
+      num.className = 'col-num';
+      num.textContent = String(i + 1);
+      const name = document.createElement('span');
+      name.className = 'col-name';
+      name.textContent = h;
+      li.appendChild(tag);
+      li.appendChild(num);
+      li.appendChild(name);
+      list.appendChild(li);
+    });
+  };
+  addRows('left', leftData?.headers);
+  // Left/right columns are mostly the same (matched by header name), so only
+  // list right-side columns that have no match on the left; matched columns
+  // are already reachable via their left-side row (selecting it selects both).
+  addRows('right', rightData?.headers, i => reverseMapping.has(i));
+  updateHeaderPanelSelection();
+}
+
+function updateHeaderPanelSelection(): void {
+  document.querySelectorAll<HTMLElement>('#header-panel-list li').forEach(li => {
+    const side = li.dataset.side as Side;
+    const col = parseInt(li.dataset.col!, 10);
+    const isXAxis = col === xAxisCol[side];
+    li.classList.toggle('selected', selectedCols[side].has(col) && !isXAxis);
+    li.classList.toggle('x-axis', isXAxis);
+  });
+}
+
+function toggleHeaderPanel(): void {
+  headerPanelOpen = !headerPanelOpen;
+  document.getElementById('header-panel')!.classList.toggle('hidden', !headerPanelOpen);
+  document.getElementById('btn-toggle-header')!.classList.toggle('active', headerPanelOpen);
+}
+
+function initHeaderPanel(): void {
+  document.getElementById('btn-toggle-header')!.addEventListener('click', toggleHeaderPanel);
+  const list = document.getElementById('header-panel-list')!;
+  // Prevent native text-selection drag when shift-clicking to select a range.
+  list.addEventListener('mousedown', e => { if (e.shiftKey) e.preventDefault(); });
+  list.addEventListener('click', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-side]');
+    if (!li) return;
+    const side = li.dataset.side as Side;
+    const colIdx = parseInt(li.dataset.col!, 10);
+    handleColumnClick(side, colIdx, e);
+    gotoCompareColumn(side, colIdx);
+  });
+  list.addEventListener('contextmenu', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-side]');
+    if (!li) return;
+    e.preventDefault();
+    showContextMenu(li.dataset.side as Side, e.clientX, e.clientY, parseInt(li.dataset.col!, 10));
+  });
 }
 
 function renderColSearchList(): void {
@@ -1336,6 +1463,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initCellTooltip(leftPane);
   initCellTooltip(rightPane);
   initColSearch();
+  initHeaderPanel();
 
   // A user-initiated scroll (wheel or drag) re-enables left/right sync after a
   // column-search jump decoupled the panes.
@@ -1457,6 +1585,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-reset-all')!.addEventListener('click', resetAll);
+  document.getElementById('btn-swap')!.addEventListener('click', swapSides);
   document.getElementById('btn-reload')!.addEventListener('click', () => {
     saveCompareReloadState();
     showLoading();

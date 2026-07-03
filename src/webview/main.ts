@@ -1,6 +1,6 @@
 import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
 import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
-import { getSelected, getXAxisCol, getDefaultXAxisCol, setXAxisCol, resetXAxis, restoreSelection } from './columnSelector';
+import { getSelected, getXAxisCol, getDefaultXAxisCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
@@ -50,6 +50,7 @@ function updateToolbar(): void {
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
   const hasCustomState = getXAxisCol() !== getDefaultXAxisCol() || hasDiff() || hasMovAvg() || hasHex();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
+  updateHeaderPanelSelection();
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
     renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol(), undefined, isXAxisOriginal());
@@ -162,6 +163,7 @@ function onLoadData(payload: ParsedFile): void {
 
   renderTable(payload, updateToolbar);
   restoreReloadState(payload.headers);
+  renderHeaderPanel();
   updateToolbar();
 }
 
@@ -307,6 +309,87 @@ function gotoColumn(colIdx: number): void {
       void (el as HTMLElement).offsetWidth; // restart animation
       el.classList.add('col-flash');
     });
+}
+
+// ---- Header panel (column list) ----
+
+let headerPanelOpen = false;
+
+function renderHeaderPanel(): void {
+  const list = document.getElementById('header-panel-list')!;
+  list.innerHTML = '';
+  currentData?.headers.forEach((h, i) => {
+    const li = document.createElement('li');
+    li.dataset.col = String(i);
+    const num = document.createElement('span');
+    num.className = 'col-num';
+    num.textContent = String(i + 1);
+    const name = document.createElement('span');
+    name.className = 'col-name';
+    name.textContent = h;
+    li.appendChild(num);
+    li.appendChild(name);
+    list.appendChild(li);
+  });
+  updateHeaderPanelSelection();
+}
+
+function updateHeaderPanelSelection(): void {
+  const selected = getSelected();
+  const xAxisCol = getXAxisCol();
+  document.querySelectorAll<HTMLElement>('#header-panel-list li').forEach(li => {
+    const col = parseInt(li.dataset.col!, 10);
+    const isXAxis = col === xAxisCol;
+    li.classList.toggle('selected', selected.includes(col) && !isXAxis);
+    li.classList.toggle('x-axis', isXAxis);
+  });
+}
+
+function toggleHeaderPanel(): void {
+  headerPanelOpen = !headerPanelOpen;
+  document.getElementById('header-panel')!.classList.toggle('hidden', !headerPanelOpen);
+  document.getElementById('btn-toggle-header')!.classList.toggle('active', headerPanelOpen);
+}
+
+function showColumnContextMenu(clientX: number, clientY: number, colIndex: number, rowIndex: number): void {
+  let colStats: { max: number; min: number; mean: number } | null = null;
+  if (colIndex >= 0 && currentData) {
+    let maxV = -Infinity, minV = Infinity, sum = 0, count = 0;
+    for (let i = 0; i < currentData.rows.length; i++) {
+      const v = parseFloat(getEffectiveValue(i, colIndex));
+      if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
+    }
+    if (count > 0) colStats = { max: maxV, min: minV, mean: sum / count };
+  }
+  showContextMenu(clientX, clientY, colIndex, rowIndex, {
+    isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
+    isDiff: colIndex >= 0 && isDiff(colIndex),
+    movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,
+    xAxisIsDefault: getXAxisCol() === getDefaultXAxisCol(),
+    isHex: colIndex >= 0 && isHex(colIndex),
+    stats: colStats,
+  });
+}
+
+function initHeaderPanel(): void {
+  document.getElementById('btn-toggle-header')!.addEventListener('click', toggleHeaderPanel);
+  const list = document.getElementById('header-panel-list')!;
+  // Prevent native text-selection drag when shift-clicking to select a range.
+  list.addEventListener('mousedown', e => { if (e.shiftKey) e.preventDefault(); });
+  list.addEventListener('click', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-col]');
+    if (!li) return;
+    const colIdx = parseInt(li.dataset.col!, 10);
+    handleColumnClick(colIdx, e);
+    updateToolbar();
+    gotoColumn(colIdx);
+  });
+  list.addEventListener('contextmenu', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-col]');
+    if (!li) return;
+    e.preventDefault();
+    showColumnContextMenu(e.clientX, e.clientY, parseInt(li.dataset.col!, 10), -1);
+  });
 }
 
 function renderColSearchList(): void {
@@ -599,6 +682,7 @@ document.addEventListener('DOMContentLoaded', () => {
   addDragScroll(document.getElementById('table-container')!);
   initCellTooltip(document.getElementById('table-container')!);
   initColSearch();
+  initHeaderPanel();
 
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 
@@ -609,23 +693,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const colIndex = colIndexStr !== undefined ? parseInt(colIndexStr) : -1;
     const rowIndexStr = target.closest<HTMLElement>('[data-row-index]')?.dataset.rowIndex;
     const rowIndex = rowIndexStr !== undefined ? parseInt(rowIndexStr) : -1;
-    let colStats: { max: number; min: number; mean: number } | null = null;
-    if (colIndex >= 0 && currentData) {
-      let maxV = -Infinity, minV = Infinity, sum = 0, count = 0;
-      for (let i = 0; i < currentData.rows.length; i++) {
-        const v = parseFloat(getEffectiveValue(i, colIndex));
-        if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
-      }
-      if (count > 0) colStats = { max: maxV, min: minV, mean: sum / count };
-    }
-    showContextMenu(e.clientX, e.clientY, colIndex, rowIndex, {
-      isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
-      isDiff: colIndex >= 0 && isDiff(colIndex),
-      movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,
-      xAxisIsDefault: getXAxisCol() === getDefaultXAxisCol(),
-      isHex: colIndex >= 0 && isHex(colIndex),
-      stats: colStats,
-    });
+    showColumnContextMenu(e.clientX, e.clientY, colIndex, rowIndex);
   });
 
   vscode.postMessage({ type: 'ready' });

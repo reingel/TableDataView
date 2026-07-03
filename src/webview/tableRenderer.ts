@@ -184,6 +184,8 @@ function computeColumnWidths(data: ParsedFile): number[] {
   const ctx = measureCanvas.getContext('2d')!;
   const cs = getComputedStyle(document.body);
   ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+  const normalFont = ctx.font;
+  const boldFont = `bold ${cs.fontSize} ${cs.fontFamily}`;
 
   const n = data.rows.length;
   const sampleIdx: number[] = [];
@@ -194,7 +196,13 @@ function computeColumnWidths(data: ParsedFile): number[] {
   return data.headers.map((h, col) => {
     // The header must always be fully visible, so its width is a hard lower
     // bound (not subject to COL_MAX_W). Only the data-driven width is capped.
-    const headerW = Math.ceil(ctx.measureText(h ?? '').width) + COL_PAD;
+    // Selected headers render bold (th.selected), which is wider than the
+    // regular font, so measure both and take the larger.
+    ctx.font = boldFont;
+    const headerWBold = ctx.measureText(h ?? '').width;
+    ctx.font = normalFont;
+    const headerWNormal = ctx.measureText(h ?? '').width;
+    const headerW = Math.ceil(Math.max(headerWBold, headerWNormal)) + COL_PAD;
     let dataMax = 0;
     for (const i of sampleIdx) {
       const v = data.rows[i]?.[col];
