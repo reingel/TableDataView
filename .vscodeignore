@@ -6,6 +6,7 @@ node_modules/
 out/**/*.map
 test-data/
 .claude/
+.codegraph/
 .DS_Store
 **/.DS_Store
 *.vsix

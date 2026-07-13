@@ -356,6 +356,8 @@ export class CompareViewProvider {
     .col-list li:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08)); }
     .col-list li.selected { background: var(--vscode-list-activeSelectionBackground, #094771); color: var(--vscode-list-activeSelectionForeground, #fff); }
     .col-list li.x-axis { color: #ff8c00; font-weight: bold; }
+    .col-list li.col-has-diff .col-name { color: #e06c6c; }
+    .col-list li.col-has-diff.selected .col-name { color: inherit; }
     #col-search-empty { padding: 6px 10px; color: var(--vscode-descriptionForeground, #888); font-style: italic; }
     #main-row {
       flex: 1;

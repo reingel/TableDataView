@@ -1227,6 +1227,7 @@ function renderHeaderPanel(): void {
       const li = document.createElement('li');
       li.dataset.side = side;
       li.dataset.col = String(i);
+      li.classList.toggle('col-has-diff', diffColumnSet[side].has(i));
       const tag = document.createElement('span');
       tag.className = `col-side ${side}`;
       tag.textContent = side === 'left' ? 'L' : 'R';

@@ -24,12 +24,27 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('tableDataView.compareFiles', (clicked?: vscode.Uri, all?: vscode.Uri[]) => {
+    vscode.commands.registerCommand('tableDataView.compareFiles', async (clicked?: vscode.Uri, all?: vscode.Uri[]) => {
       const files = (all ?? (clicked ? [clicked] : [])).filter(u =>
         DATA_EXTS.includes(path.extname(u.fsPath).toLowerCase())
       );
-      if (files.length < 2) {
-        vscode.window.showInformationMessage('TableDataView: Ctrl+click to select 2 data files, then right-click to compare.');
+      if (files.length === 1) {
+        const picked = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: false,
+          openLabel: 'Select as Left File',
+          title: 'Select the left file to compare against',
+          filters: { 'Data files': DATA_EXTS.map(ext => ext.slice(1)) },
+        });
+        if (!picked || picked.length === 0) {
+          return;
+        }
+        compareProvider.createOrShowPanel(picked[0], files[0]);
+        return;
+      }
+      if (files.length === 0) {
+        vscode.window.showInformationMessage('TableDataView: select a data file, then right-click to compare.');
         return;
       }
       if (files.length > 2) {
