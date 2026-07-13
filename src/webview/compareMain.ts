@@ -725,16 +725,34 @@ const COL_MIN_W = 50;
 const COL_MAX_W = 480;
 const COL_PAD = 22;
 const colWidths: Record<Side, number[]> = { left: [], right: [] };
-let measureCanvas: HTMLCanvasElement | null = null;
+let measureEl: HTMLSpanElement | null = null;
+
+// Measure text width via an offscreen DOM element rather than Canvas2D.
+// Canvas text metrics can diverge from actual layout by a few pixels
+// depending on the platform's font rasterizer (notably on Windows), which
+// was enough to clip long headers even though headerW is meant to be a
+// hard lower bound. DOM measurement uses the same layout engine that
+// renders the real cells, so it always matches.
+function measureTextWidth(text: string, font: string): number {
+  if (!measureEl) {
+    measureEl = document.createElement('span');
+    measureEl.style.position = 'absolute';
+    measureEl.style.visibility = 'hidden';
+    measureEl.style.whiteSpace = 'pre';
+    measureEl.style.left = '-9999px';
+    measureEl.style.top = '0';
+    document.body.appendChild(measureEl);
+  }
+  measureEl.style.font = font;
+  measureEl.textContent = text;
+  return measureEl.getBoundingClientRect().width;
+}
 
 // Fixed pixel width per column from header + sampled values, so columns don't
 // jitter as the virtual scroller renders different rows.
 function computeColumnWidths(data: ParsedFile): number[] {
-  if (!measureCanvas) measureCanvas = document.createElement('canvas');
-  const ctx = measureCanvas.getContext('2d')!;
   const cs = getComputedStyle(document.body);
-  ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
-  const normalFont = ctx.font;
+  const normalFont = `${cs.fontSize} ${cs.fontFamily}`;
   const boldFont = `bold ${cs.fontSize} ${cs.fontFamily}`;
 
   const n = data.rows.length;
@@ -748,15 +766,13 @@ function computeColumnWidths(data: ParsedFile): number[] {
     // bound (not subject to COL_MAX_W). Only the data-driven width is capped.
     // Selected headers render bold (th.selected), which is wider than the
     // regular font, so measure both and take the larger.
-    ctx.font = boldFont;
-    const headerWBold = ctx.measureText(h ?? '').width;
-    ctx.font = normalFont;
-    const headerWNormal = ctx.measureText(h ?? '').width;
+    const headerWBold = measureTextWidth(h ?? '', boldFont);
+    const headerWNormal = measureTextWidth(h ?? '', normalFont);
     const headerW = Math.ceil(Math.max(headerWBold, headerWNormal)) + COL_PAD;
     let dataMax = 0;
     for (const i of sampleIdx) {
       const v = data.rows[i]?.[col];
-      if (v) { const w = ctx.measureText(v).width; if (w > dataMax) dataMax = w; }
+      if (v) { const w = measureTextWidth(v, normalFont); if (w > dataMax) dataMax = w; }
     }
     const dataW = Math.min(COL_MAX_W, Math.ceil(dataMax) + COL_PAD);
     return Math.max(COL_MIN_W, headerW, dataW);
