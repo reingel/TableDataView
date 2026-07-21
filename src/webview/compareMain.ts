@@ -18,6 +18,9 @@ let displayRowCount = 0;
 let columnMapping = new Map<number, number>();
 // rightColIdx → leftColIdx
 let reverseMapping = new Map<number, number>();
+// Manual overrides on top of buildColumnMapping's auto-detected pairs.
+// Keyed by left column index; null means "explicitly unmatched".
+let matchOverrides = new Map<number, number | null>();
 
 // Transform state per side
 const diffCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
@@ -151,6 +154,66 @@ function buildColumnMapping(leftHeaders: string[], rightHeaders: string[]): void
   // Tier 4: case-insensitive most similar (LCS)
   greedyMatch(leftHeaders, rightHeaders, uL, uR,
     (a, b) => lcsLength(a.toLowerCase(), b.toLowerCase()));
+}
+
+// ---- Manual match overrides ----
+
+// Force li (a left column index) to map to ri (a right column index), or to
+// no match at all when ri is null. Releases whatever li/ri were previously
+// paired with so the mapping never ends up with two left columns pointing at
+// the same right column (or vice versa).
+function forceMatch(li: number, ri: number | null): void {
+  const oldRi = columnMapping.get(li);
+  if (oldRi !== undefined) reverseMapping.delete(oldRi);
+  if (ri === null) { columnMapping.delete(li); return; }
+  const oldLi = reverseMapping.get(ri);
+  if (oldLi !== undefined) columnMapping.delete(oldLi);
+  columnMapping.set(li, ri);
+  reverseMapping.set(ri, li);
+}
+
+// Re-applies user-set overrides on top of a freshly rebuilt auto mapping
+// (called after buildColumnMapping on load/reload).
+function applyMatchOverrides(): void {
+  for (const [li, ri] of matchOverrides) forceMatch(li, ri);
+}
+
+// `col-has-diff` is baked into the <th> className once in initPane and never
+// re-toggled afterward (unlike diff-col/movavg-col/hex-col, which have their
+// own applyXHeader functions), so a mapping change needs to refresh it
+// explicitly on both header rows.
+function refreshColHasDiffHeaders(): void {
+  (['left', 'right'] as Side[]).forEach(side => {
+    const n = (side === 'left' ? leftData : rightData)?.headers.length ?? 0;
+    for (let i = 0; i < n; i++) {
+      document.querySelectorAll<HTMLElement>(`#${side}-header-row [data-col-index="${i}"]`)
+        .forEach(el => el.classList.toggle('col-has-diff', diffColumnSet[side].has(i)));
+    }
+  });
+}
+
+function afterMappingChanged(): void {
+  computeDiffColumns();
+  refreshColHasDiffHeaders();
+  renderHeaderPanel();
+  scheduleRender();
+  updateToolbar();
+}
+
+function setManualMatch(li: number, ri: number): void {
+  matchOverrides.set(li, ri);
+  forceMatch(li, ri);
+  afterMappingChanged();
+  flashColumn('left', li);
+  flashColumn('right', ri);
+}
+
+function clearManualMatch(side: Side, colIdx: number): void {
+  const li = side === 'left' ? colIdx : reverseMapping.get(colIdx);
+  if (li === undefined) return;
+  matchOverrides.set(li, null);
+  forceMatch(li, null);
+  afterMappingChanged();
 }
 
 // ---- Toolbar ----
@@ -889,9 +952,49 @@ function scrollToRow(rowIdx: number): void {
 
 let ctxSide: Side = 'left';
 let ctxColIdx: number = -1;
+let lastCtxX = 0;
+let lastCtxY = 0;
+
+// "Match with…" flyout: lists the opposite side's columns so the user can
+// pick which one this column should be paired with.
+let matchListCtx: { side: Side; col: number } | null = null;
+
+function showMatchList(side: Side, colIdx: number, x: number, y: number): void {
+  const other = otherSide(side);
+  const headers = (other === 'left' ? leftData : rightData)?.headers ?? [];
+  const currentOther = getMappedCol(side, colIdx);
+  const listEl = document.getElementById('ctx-match-list')!;
+  listEl.innerHTML = '';
+  headers.forEach((h, i) => {
+    const li = document.createElement('li');
+    li.dataset.col = String(i);
+    li.classList.toggle('selected', i === currentOther);
+    const tag = document.createElement('span');
+    tag.className = `col-side ${other}`;
+    tag.textContent = other === 'left' ? 'L' : 'R';
+    const num = document.createElement('span');
+    num.className = 'col-num';
+    num.textContent = String(i + 1);
+    const name = document.createElement('span');
+    name.className = 'col-name';
+    name.textContent = h;
+    li.append(tag, num, name);
+    listEl.appendChild(li);
+  });
+  listEl.style.left = `${x}px`;
+  listEl.style.top = `${y}px`;
+  listEl.classList.remove('hidden');
+  matchListCtx = { side, col: colIdx };
+}
+
+function hideMatchList(): void {
+  document.getElementById('ctx-match-list')!.classList.add('hidden');
+  matchListCtx = null;
+}
 
 function initContextMenu(): void {
   const menuEl = document.getElementById('context-menu')!;
+  const matchListEl = document.getElementById('ctx-match-list')!;
 
   document.getElementById('ctx-reset-xaxis')!.addEventListener('click', () => {
     menuEl.classList.add('hidden');
@@ -931,12 +1034,35 @@ function initContextMenu(): void {
       if (ctxColIdx >= 0) setMovAvg(ctxSide, ctxColIdx, n);
     });
   });
+  document.getElementById('ctx-match-with')!.addEventListener('click', e => {
+    // Stop this click from reaching the document-level listener below, which
+    // would otherwise immediately hide the flyout list we're about to open.
+    e.stopPropagation();
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) showMatchList(ctxSide, ctxColIdx, lastCtxX, lastCtxY);
+  });
+  document.getElementById('ctx-clear-match')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) clearManualMatch(ctxSide, ctxColIdx);
+  });
+  matchListEl.addEventListener('click', e => {
+    const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-col]');
+    if (!li || !matchListCtx) return;
+    const otherCol = parseInt(li.dataset.col!, 10);
+    const li_ = matchListCtx.side === 'left' ? matchListCtx.col : otherCol;
+    const ri_ = matchListCtx.side === 'left' ? otherCol : matchListCtx.col;
+    setManualMatch(li_, ri_);
+    hideMatchList();
+  });
 
-  document.addEventListener('click', () => menuEl.classList.add('hidden'));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') menuEl.classList.add('hidden'); });
+  document.addEventListener('click', () => { menuEl.classList.add('hidden'); hideMatchList(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { menuEl.classList.add('hidden'); hideMatchList(); }
+  });
 }
 
 function showContextMenu(side: Side, x: number, y: number, colIndex: number): void {
+  hideMatchList();
   ctxSide = side;
   ctxColIdx = colIndex;
 
@@ -965,6 +1091,9 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-goto-prev-diff', hasDiffCol);
   setItemVisible('ctx-goto-max-diff', hasMappedCol);
   setItemVisible('ctx-diff-sep', (hasDiffCol || hasMappedCol) && colIndex >= 0);
+  setItemVisible('ctx-match-sep', colIndex >= 0);
+  setItemVisible('ctx-match-with', colIndex >= 0);
+  setItemVisible('ctx-clear-match', hasMappedCol);
 
   const hasStats = colIndex >= 0;
   setItemVisible('ctx-stats-sep', hasStats);
@@ -990,6 +1119,9 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
       statsEl.innerHTML = '(no numeric data)';
     }
   }
+
+  lastCtxX = x;
+  lastCtxY = y;
 
   const menuEl = document.getElementById('context-menu')!;
   menuEl.style.left = `${x}px`;
@@ -1095,6 +1227,10 @@ function swapSides(): void {
   [colWidths.left, colWidths.right] = [colWidths.right, colWidths.left];
   [lastClickedCol.left, lastClickedCol.right] = [lastClickedCol.right, lastClickedCol.left];
 
+  // Manual overrides are keyed by left-column index; swapping which physical
+  // side is "left" would invert their meaning, so drop them and let the
+  // fresh auto-match run instead of transposing them.
+  matchOverrides.clear();
   buildColumnMapping(leftData.headers, rightData.headers);
   computeDiffColumns();
   updateFileLabels();
@@ -1114,6 +1250,7 @@ function commitCompareData(left: ParsedFile, right: ParsedFile): void {
     rightData = right;
     displayRowCount = Math.min(leftData.rows.length, rightData.rows.length);
     buildColumnMapping(leftData.headers, rightData.headers);
+    applyMatchOverrides();
 
     updateFileLabels();
 

@@ -410,6 +410,17 @@ export class CompareViewProvider {
       font-size: 0.9em;
     }
     #context-menu li:hover { background: var(--vscode-menu-selectionBackground); }
+    #ctx-match-list {
+      position: fixed;
+      background: var(--vscode-menu-background, #252526);
+      border: 1px solid var(--vscode-menu-border, #454545);
+      z-index: 110;
+      min-width: 180px;
+      max-height: 320px;
+      overflow-y: auto;
+      margin: 0;
+      padding: 4px 0;
+    }
     .ctx-separator { height: 1px; background: var(--vscode-menu-border, #454545); margin: 4px 0; padding: 0; cursor: default; pointer-events: none; }
     .ctx-separator:hover { background: var(--vscode-menu-border, #454545); }
     #ctx-stats { cursor: default; color: var(--vscode-descriptionForeground, #888); font-size: 0.82em; white-space: nowrap; line-height: 1.6; }
@@ -523,6 +534,9 @@ export class CompareViewProvider {
     <ul>
       <li id="ctx-reset-xaxis">Reset x-axis</li>
       <li id="ctx-set-xaxis">Set as x-axis</li>
+      <li id="ctx-match-sep" class="ctx-separator"></li>
+      <li id="ctx-match-with">Match with…</li>
+      <li id="ctx-clear-match" class="hidden">Clear match</li>
       <li id="ctx-show-hex">Show in hex</li>
       <li id="ctx-show-diff">Show numerical differences</li>
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
@@ -538,6 +552,8 @@ export class CompareViewProvider {
       <li id="ctx-stats" class="hidden"></li>
     </ul>
   </div>
+
+  <ul id="ctx-match-list" class="col-list hidden"></ul>
 
   <div id="graph-container" class="hidden">
     <div id="graph-resize-handle"></div>
