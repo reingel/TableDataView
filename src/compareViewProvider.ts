@@ -548,6 +548,8 @@ export class CompareViewProvider {
       <li id="ctx-goto-next-diff" class="hidden">Go to next different row</li>
       <li id="ctx-goto-prev-diff" class="hidden">Go to prev. different row</li>
       <li id="ctx-goto-max-diff" class="hidden">Find max. difference row</li>
+      <li id="ctx-goto-prev-nan" class="hidden">Go to prev. NaN</li>
+      <li id="ctx-goto-next-nan" class="hidden">Go to next NaN</li>
       <li id="ctx-stats-sep" class="ctx-separator hidden"></li>
       <li id="ctx-stats" class="hidden"></li>
     </ul>
@@ -582,8 +584,8 @@ export class CompareViewProvider {
       <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
         Marker
         <select id="sel-marker" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
-          <option value="none" selected>none</option>
-          <option value="dot">.</option>
+          <option value="none">none</option>
+          <option value="dot" selected>.</option>
           <option value="circle">o</option>
         </select>
       </label>

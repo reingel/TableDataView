@@ -158,6 +158,10 @@ export function setCrosshairRow(rowIdx: number | null, colIdxs: number[]): void 
   applyRowHighlight();
 }
 
+export function getCrosshairRow(): number | null {
+  return crosshairRowIdx;
+}
+
 export function scrollToRow(rowIdx: number): void {
   const container = document.getElementById('table-container')!;
   const clientHeight = container.clientHeight;

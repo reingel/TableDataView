@@ -8,7 +8,7 @@ const MARKER_RADIUS: Record<string, number> = { none: 0, dot: 2, circle: 5 };
 let chartInstance: any = null;
 let fftChartInstance: any = null;
 let lineWidth: number = 1;
-let markerStyle: string = 'none';
+let markerStyle: string = 'dot';
 let crosshairDataX: number | null = null;
 let crosshairOrigRowIdx: number | null = null;
 let crosshair2DataX: number | null = null;
@@ -750,12 +750,36 @@ function applyZoom(): void {
   redraw();
 }
 
+// Chart.js' 'index' interaction mode assumes every dataset shares one point
+// index space: it locates the nearest point, then hands back data[thatIndex] of
+// each dataset. NaN breaks the assumption — buildSegments splits a column with
+// NaN gaps into several segment datasets, so the same array index means a
+// different row in each of them, and when the first dataset is shorter than the
+// index there is no element at all and the click silently did nothing. Pick the
+// nearest plotted point ourselves; every point carries its own row index.
+function findNearestPoint(e: MouseEvent): DataPoint | null {
+  if (!chartInstance) return null;
+  const px = getCanvasPixelX(e);
+  const py = getCanvasPixelY(e);
+  const area = chartInstance.chartArea;
+  // Ignore clicks on the legend / axis margins, as Chart.js hit-testing did.
+  if (px < area.left || px > area.right || py < area.top || py > area.bottom) return null;
+  const dataX = chartInstance.scales.x.getValueForPixel(px);
+  if (dataX === undefined || !isFinite(dataX)) return null;
+  let best: DataPoint | null = null;
+  let bestDist = Infinity;
+  for (const ds of chartInstance.data.datasets) {
+    for (const pt of ds.data as DataPoint[]) {
+      const d = Math.abs(pt.x - dataX);
+      if (d < bestDist) { bestDist = d; best = pt; }
+    }
+  }
+  return best;
+}
+
 function handleCrosshairClick(e: MouseEvent): void {
   if (!chartInstance) return;
-  const elements = chartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
-  if (!elements.length) return;
-  const el = elements[0];
-  const pt = chartInstance.data.datasets[el.datasetIndex].data[el.index] as DataPoint;
+  const pt = findNearestPoint(e);
   if (!pt) return;
   crosshairDataX = pt.x;
   crosshairOrigRowIdx = pt.rowIdx;
@@ -766,10 +790,7 @@ function handleCrosshairClick(e: MouseEvent): void {
 
 function handleCrosshair2Click(e: MouseEvent): void {
   if (!chartInstance) return;
-  const elements = chartInstance.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
-  if (!elements.length) return;
-  const el = elements[0];
-  const pt = chartInstance.data.datasets[el.datasetIndex].data[el.index] as DataPoint;
+  const pt = findNearestPoint(e);
   if (!pt) return;
   crosshair2DataX = pt.x;
   crosshair2OrigRowIdx = pt.rowIdx;
