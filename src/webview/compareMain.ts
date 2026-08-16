@@ -710,6 +710,22 @@ function gotoMaxDiff(side: Side, colIdx: number): void {
   navigateToRow(maxRow);
 }
 
+function gotoNaN(side: Side, colIdx: number, dir: 1 | -1): void {
+  const n = displayRowCount;
+  if (n === 0) return;
+  // Wrap around so repeated invocations walk through every gap in the column.
+  const start = crosshairRowIdx !== null
+    ? crosshairRowIdx + dir
+    : (dir === 1 ? 0 : n - 1);
+  for (let k = 0; k < n; k++) {
+    const i = ((start + dir * k) % n + n) % n;
+    if (!isFinite(parseFloat(getCellValue(side, i, colIdx)))) {
+      navigateToRow(i);
+      return;
+    }
+  }
+}
+
 function saveCompareReloadState(): void {
   if (!leftData || !rightData) return;
   const pane = document.getElementById('left-pane')!;
@@ -1028,6 +1044,14 @@ function initContextMenu(): void {
     menuEl.classList.add('hidden');
     if (ctxColIdx >= 0) gotoMaxDiff(ctxSide, ctxColIdx);
   });
+  document.getElementById('ctx-goto-prev-nan')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) gotoNaN(ctxSide, ctxColIdx, -1);
+  });
+  document.getElementById('ctx-goto-next-nan')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) gotoNaN(ctxSide, ctxColIdx, 1);
+  });
   [10, 30, 100, 1000].forEach(n => {
     document.getElementById(`ctx-show-movavg-${n}`)!.addEventListener('click', () => {
       menuEl.classList.add('hidden');
@@ -1096,14 +1120,22 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-clear-match', hasMappedCol);
 
   const hasStats = colIndex >= 0;
+  // Turned on below if the column has NaNs.
+  setItemVisible('ctx-goto-prev-nan', false);
+  setItemVisible('ctx-goto-next-nan', false);
   setItemVisible('ctx-stats-sep', hasStats);
   setItemVisible('ctx-stats', hasStats);
   if (hasStats) {
-    let maxV = -Infinity, minV = Infinity, sum = 0, count = 0;
+    let maxV = -Infinity, minV = Infinity, sum = 0, count = 0, nanCount = 0;
     for (let i = 0; i < displayRowCount; i++) {
       const v = parseFloat(getCellValue(side, i, colIndex));
       if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
+      else nanCount++;
     }
+    // Only worth offering on a numeric column that actually has gaps — a text
+    // column would be all "NaN" by this measure.
+    setItemVisible('ctx-goto-prev-nan', count > 0 && nanCount > 0);
+    setItemVisible('ctx-goto-next-nan', count > 0 && nanCount > 0);
     const fmt = (v: number) => {
       if (!isFinite(v)) return 'N/A';
       const abs = Math.abs(v);
@@ -1114,7 +1146,8 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
     const statsEl = document.getElementById('ctx-stats')!;
     if (count > 0) {
       statsEl.innerHTML =
-        `max: ${fmt(maxV)}<br>min: ${fmt(minV)}<br>max−min: ${fmt(maxV - minV)}<br>mean: ${fmt(sum / count)}`;
+        `max: ${fmt(maxV)}<br>min: ${fmt(minV)}<br>max−min: ${fmt(maxV - minV)}<br>mean: ${fmt(sum / count)}` +
+        `<br>NaN: ${nanCount.toLocaleString()}`;
     } else {
       statsEl.innerHTML = '(no numeric data)';
     }
@@ -1331,7 +1364,14 @@ function centerPaneColumn(side: Side, col: number): void {
   if (col === 0) { pane.scrollLeft = 0; return; }
   const th = document.querySelector<HTMLElement>(`#${side}-header-row th[data-col-index="${col}"]`);
   if (!th) return;
-  pane.scrollLeft = Math.max(0, th.offsetLeft + th.offsetWidth / 2 - pane.clientWidth / 2);
+  // offsetLeft is measured against offsetParent, and a `position: sticky` th has
+  // no table/pane offsetParent — it falls through to <body>. On the right pane
+  // that adds the left pane's width, scrolling far past the target column, so
+  // measure the header cell against the pane itself instead.
+  const paneRect = pane.getBoundingClientRect();
+  const thRect = th.getBoundingClientRect();
+  const colLeft = thRect.left - paneRect.left + pane.scrollLeft;
+  pane.scrollLeft = Math.max(0, colLeft + thRect.width / 2 - pane.clientWidth / 2);
 }
 
 function flashColumn(side: Side, col: number): void {
@@ -1339,21 +1379,14 @@ function flashColumn(side: Side, col: number): void {
     .forEach(el => { void (el as HTMLElement).offsetWidth; el.classList.add('col-flash'); });
 }
 
-function findColByName(side: Side, name: string): number | undefined {
-  const headers = side === 'left' ? leftData?.headers : rightData?.headers;
-  if (!headers) return undefined;
-  const lower = name.toLowerCase();
-  const i = headers.findIndex(h => h.toLowerCase() === lower);
-  return i >= 0 ? i : undefined;
-}
-
 function gotoCompareColumn(side: Side, col: number): void {
   const other = otherSide(side);
-  const headers = side === 'left' ? leftData?.headers : rightData?.headers;
-  const name = headers?.[col] ?? '';
-  // Prefer the other pane's column with the same header name; fall back to the
-  // fuzzy column mapping.
-  const otherCol = findColByName(other, name) ?? getMappedCol(side, col);
+  // The column mapping is the only authority on which pair belongs together:
+  // it already prefers exact header names and carries the user's "Match with…"
+  // overrides. Looking the other pane up by header name instead would center
+  // the panes on two columns that are not actually matched (e.g. a manually
+  // re-matched column whose name still exists elsewhere on the other side).
+  const otherCol = getMappedCol(side, col);
 
   document.querySelectorAll('.col-flash').forEach(el => el.classList.remove('col-flash'));
 
@@ -1477,8 +1510,23 @@ function updateColSearch(): void {
   const tokens = input.value.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
   const matchHeader = (h: string) => { const hl = h.toLowerCase(); return tokens.every(t => hl.includes(t)); };
   colSearchMatches = [];
-  leftData?.headers.forEach((h, i) => { if (matchHeader(h)) colSearchMatches.push({ side: 'left', col: i }); });
-  rightData?.headers.forEach((h, i) => { if (matchHeader(h)) colSearchMatches.push({ side: 'right', col: i }); });
+  const listedLeft = new Set<number>();
+  leftData?.headers.forEach((h, i) => {
+    if (!matchHeader(h)) return;
+    colSearchMatches.push({ side: 'left', col: i });
+    listedLeft.add(i);
+  });
+  // A matched pair is one logical column, so listing it from both sides would
+  // give two rows that jump to the exact same place (the "R …" row would look
+  // like it selected the left pane). Keep a right-side row only when its
+  // partner is not already listed — i.e. the column is unmatched, or only the
+  // right pane's header matches what was typed.
+  rightData?.headers.forEach((h, i) => {
+    if (!matchHeader(h)) return;
+    const li = reverseMapping.get(i);
+    if (li !== undefined && listedLeft.has(li)) return;
+    colSearchMatches.push({ side: 'right', col: i });
+  });
   colSearchSel = 0;
   renderColSearchList();
 }

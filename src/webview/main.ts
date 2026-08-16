@@ -1,6 +1,6 @@
 import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { render as renderTable, setCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
-import { getSelected, getXAxisCol, getDefaultXAxisCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
+import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
+import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
@@ -171,6 +171,29 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Step to the next (dir = 1) or previous (dir = -1) row whose value in `col`
+// differs from the value at `startRow`. Shared by the context menu and the
+// shift + arrow shortcut.
+function findChange(col: number, startRow: number, dir: 1 | -1): void {
+  if (!currentData || col < 0 || startRow < 0) return;
+  const n = currentData.rows.length;
+  const refVal = getEffectiveValue(startRow, col);
+  for (let i = startRow + dir; i >= 0 && i < n; i += dir) {
+    if (getEffectiveValue(i, col) !== refVal) {
+      navigateToRow(i);
+      return;
+    }
+  }
+}
+
+// The column single-column commands act on: the last one clicked, falling back
+// to the last selected one that isn't the x-axis.
+function getCommandCol(): number | null {
+  const last = getLastClickedCol();
+  if (last !== null) return last;
+  return getSelected().filter(c => c !== getXAxisCol()).pop() ?? null;
+}
+
 function highlightTableRow(rowIdx: number): void {
   setCrosshairRow(rowIdx, getSelected());
   scrollToRow(rowIdx);
@@ -207,6 +230,20 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
   e.preventDefault();
+
+  // While the graph is open, shift + left/right walks the crosshair through the
+  // value changes of the last selected column (same as the context menu's
+  // Find prev./next change).
+  const graphOpen = !document.getElementById('graph-container')!.classList.contains('hidden');
+  if (graphOpen && e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    const col = getCommandCol();
+    if (col === null || !currentData) return;
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    // With no crosshair yet, start from the end the search moves away from.
+    const start = getCrosshairRow() ?? (dir === 1 ? 0 : currentData.rows.length - 1);
+    findChange(col, start, dir);
+    return;
+  }
 
   const container = document.getElementById('table-container')!;
   const modifier = e.metaKey || e.ctrlKey;
@@ -352,14 +389,17 @@ function toggleHeaderPanel(): void {
 }
 
 function showColumnContextMenu(clientX: number, clientY: number, colIndex: number, rowIndex: number): void {
-  let colStats: { max: number; min: number; mean: number } | null = null;
+  // A text column has no stats at all, so it never offers "Go to next NaN"
+  // either — every cell would match.
+  let colStats: { max: number; min: number; mean: number; nanCount: number } | null = null;
   if (colIndex >= 0 && currentData) {
-    let maxV = -Infinity, minV = Infinity, sum = 0, count = 0;
+    let maxV = -Infinity, minV = Infinity, sum = 0, count = 0, nanCount = 0;
     for (let i = 0; i < currentData.rows.length; i++) {
       const v = parseFloat(getEffectiveValue(i, colIndex));
       if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
+      else nanCount++;
     }
-    if (count > 0) colStats = { max: maxV, min: minV, mean: sum / count };
+    if (count > 0) colStats = { max: maxV, min: minV, mean: sum / count, nanCount };
   }
   showContextMenu(clientX, clientY, colIndex, rowIndex, {
     isXAxis: colIndex >= 0 && colIndex === getXAxisCol(),
@@ -556,17 +596,8 @@ document.addEventListener('DOMContentLoaded', () => {
     showOriginal: (col) => { clearDiff(col); clearMovAvg(col); clearHex(col); updateToolbar(); },
     showMovAvg: (col, windowSize) => { setMovAvg(col, windowSize); updateToolbar(); },
     showHex: (col) => { setHex(col); updateToolbar(); },
-    findNextChange: (col, startRow) => {
-      if (!currentData || startRow < 0) return;
-      const n = currentData.rows.length;
-      const refVal = getEffectiveValue(startRow, col);
-      for (let i = startRow + 1; i < n; i++) {
-        if (getEffectiveValue(i, col) !== refVal) {
-          navigateToRow(i);
-          return;
-        }
-      }
-    },
+    findNextChange: (col, startRow) => findChange(col, startRow, 1),
+    findPrevChange: (col, startRow) => findChange(col, startRow, -1),
     gotoMax: (col) => {
       if (!currentData) return;
       let maxVal = -Infinity, maxRow = -1;
@@ -584,6 +615,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isFinite(v) && v < minVal) { minVal = v; minRow = i; }
       }
       if (minRow >= 0) navigateToRow(minRow);
+    },
+    gotoNextNaN: (col, startRow) => {
+      if (!currentData) return;
+      const n = currentData.rows.length;
+      if (n === 0) return;
+      // Wrap around so repeated invocations walk through every gap in the column.
+      const from = startRow >= 0 ? startRow + 1 : 0;
+      for (let k = 0; k < n; k++) {
+        const i = (from + k) % n;
+        if (!isFinite(parseFloat(getEffectiveValue(i, col)))) {
+          navigateToRow(i);
+          return;
+        }
+      }
+    },
+    gotoPrevNaN: (col, startRow) => {
+      if (!currentData) return;
+      const n = currentData.rows.length;
+      if (n === 0) return;
+      const from = startRow >= 0 ? startRow - 1 : n - 1;
+      for (let k = 0; k < n; k++) {
+        const i = ((from - k) % n + n) % n;
+        if (!isFinite(parseFloat(getEffectiveValue(i, col)))) {
+          navigateToRow(i);
+          return;
+        }
+      }
     },
   });
 

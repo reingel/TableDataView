@@ -53,6 +53,12 @@ export function getSelected(): number[] {
   return Array.from(selectedColumns);
 }
 
+// The column the user most recently clicked, i.e. what "the selected column"
+// means for single-column commands. Null until the first click.
+export function getLastClickedCol(): number | null {
+  return lastClickedIndex;
+}
+
 export function getXAxisCol(): number {
   return xAxisCol;
 }

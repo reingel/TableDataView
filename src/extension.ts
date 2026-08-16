@@ -30,6 +30,9 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (files.length === 1) {
         const picked = await vscode.window.showOpenDialog({
+          // Open the dialog in the folder of the file that was right-clicked —
+          // the other file is usually a sibling.
+          defaultUri: vscode.Uri.joinPath(files[0], '..'),
           canSelectFiles: true,
           canSelectFolders: false,
           canSelectMany: false,
