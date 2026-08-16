@@ -31,6 +31,7 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
 | **Cmd/Ctrl + ↓** | Jump to bottom |
 | **Cmd/Ctrl + ←** | Jump to leftmost column |
 | **Cmd/Ctrl + →** | Jump to rightmost column |
+| **Shift + ← / →** | While the graph is open, steps the crosshair to the previous / next row where the last selected column's value changes (same as **Find prev./next change**) |
 
 ### Right-Click Context Menu
 
@@ -44,12 +45,15 @@ Right-click any cell to access column-specific actions:
 | **Show numerical differences** | Replaces values with row-to-row differences `value[k] − value[k−1]`; first row is set to 0 (highlighted in green). |
 | **Show moving averages (n=10/30/100/1000)** | Replaces values with a rolling average over the last n rows (highlighted in blue). |
 | **Show original values** | Restores the original data. Shown when hex, diff, or moving average is active. |
+| **Find prev. change** | Scrolls to the previous row where this column's value changes. |
 | **Find next change** | Scrolls to the next row where this column's value changes. |
 | **Go to max. value** | Scrolls to the row with the maximum value in this column. |
 | **Go to min. value** | Scrolls to the row with the minimum value in this column. |
+| **Go to prev. NaN** | Scrolls to the previous row whose value is not a finite number (`NaN`, empty, `Infinity`), wrapping around at the top. Shown only when the column has both numbers and NaNs. |
+| **Go to next NaN** | Same, searching downwards. |
 
 At the bottom of the menu, column statistics are displayed (non-clickable):
-- **max**, **min**, **max−min**, **mean** of the currently displayed values
+- **max**, **min**, **max−min**, **mean**, and the **NaN** count of the currently displayed values
 
 ### Toolbar
 
@@ -82,7 +86,7 @@ Select one or more columns, then click **Show Graph**.
 - **Show FFT** — opens an FFT pane below the graph for the displayed data; resizable independently
 - Resizable graph panel — drag the top edge to adjust height
 - Adjustable **Line width** (0.5 / 1.0 / 1.5 / 2.0 / 3.0)
-- **Marker** style (none / dot / circle)
+- **Marker** style (none / `.` / `o`) — defaults to `.`
 - **Hide Crosshair** — hides both crosshairs
 - **Close** — closes the graph panel
 
@@ -114,7 +118,7 @@ All transforms apply to both sides simultaneously:
 - Scroll position
 
 ### Compare Right-Click Context Menu
-Includes all the same items as the table view, plus:
+Includes the same items as the table view (except **Find prev./next change**), plus:
 
 | Menu item | Description |
 |---|---|
@@ -147,6 +151,8 @@ All graph interactions (zoom, pan, crosshair, FFT) work the same as in the singl
 ### Compare View
 1. In the **Explorer**, select two supported files (Ctrl/Cmd+click to multi-select)
 2. Right-click and select **TableDataView: compare**
+
+With only one file selected, the same menu item opens a file picker — starting in that file's own folder — to choose the file for the left pane; the file you right-clicked becomes the right pane.
 
 ### Supported File Extensions
 
