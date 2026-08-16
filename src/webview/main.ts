@@ -2,7 +2,7 @@ import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
 import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
 import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -306,6 +306,16 @@ function showCellTooltip(td: HTMLElement): void {
   if (y + th > window.innerHeight - 4) y = cell.top - th - 2;
   tip.style.left = `${x}px`;
   tip.style.top = `${y}px`;
+}
+
+// Hovering a column in the table lights up its line in the graph.
+function initColumnHover(container: HTMLElement): void {
+  container.addEventListener('mouseover', e => {
+    const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-col-index]');
+    const col = cell ? parseInt(cell.dataset.colIndex!, 10) : NaN;
+    setHoveredColumns(isNaN(col) ? null : col, null);
+  });
+  container.addEventListener('mouseleave', () => setHoveredColumns(null, null));
 }
 
 function initCellTooltip(container: HTMLElement): void {
@@ -739,6 +749,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   addDragScroll(document.getElementById('table-container')!);
   initCellTooltip(document.getElementById('table-container')!);
+  initColumnHover(document.getElementById('table-container')!);
   initColSearch();
   initHeaderPanel();
 

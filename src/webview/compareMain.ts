@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, updateViewport, setGraphDiffMode } from './graphRenderer';
+import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
 import { detectDefaultXAxis, SEQ_X } from './columnSelector';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
@@ -1340,6 +1340,19 @@ function showCellTooltip(td: HTMLElement): void {
   tip.style.top = `${y}px`;
 }
 
+// Hovering a column in either pane lights up its line in the graph, together
+// with the line of the column it is matched to on the other side.
+function initColumnHover(side: Side, container: HTMLElement): void {
+  container.addEventListener('mouseover', e => {
+    const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-col-index]');
+    const col = cell ? parseInt(cell.dataset.colIndex!, 10) : NaN;
+    if (isNaN(col)) { setHoveredColumns(null, null); return; }
+    const other = getMappedCol(side, col) ?? null;
+    setHoveredColumns(side === 'left' ? col : other, side === 'left' ? other : col);
+  });
+  container.addEventListener('mouseleave', () => setHoveredColumns(null, null));
+}
+
 function initCellTooltip(container: HTMLElement): void {
   container.addEventListener('mouseover', e => {
     const td = (e.target as HTMLElement).closest<HTMLElement>('td[data-col-index], th[data-col-index]');
@@ -1664,6 +1677,8 @@ document.addEventListener('DOMContentLoaded', () => {
   addDragScroll(rightPane);
   initCellTooltip(leftPane);
   initCellTooltip(rightPane);
+  initColumnHover('left', leftPane);
+  initColumnHover('right', rightPane);
   initColSearch();
   initHeaderPanel();
 

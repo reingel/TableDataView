@@ -102,6 +102,168 @@ export function setRowHighlightCallback(cb: (rowIdx: number) => void): void {
   rowHighlightCallback = cb;
 }
 
+// ---- Hover highlight ----
+// The table tells the graph which column the pointer is over and the matching
+// series is re-drawn, lit up, on a transparent canvas stacked over the chart.
+// Everything here stays clear of Chart.js: asking it to restyle a dataset means
+// an update() that re-processes every point, which stalls on large files.
+let hoveredLeftCol: number | null = null;
+let hoveredRightCol: number | null = null;
+let hoverOverlay: HTMLCanvasElement | null = null;
+let hoverDrawPending = false;
+// Screen-space polylines, keyed by the chart geometry they were built from so
+// they survive pointer movement but are rebuilt after a zoom / pan / resize.
+const hoverPathCache = new Map<number, { key: string; pts: number[] }>();
+
+const HOVER_EXTRA_WIDTH = 2;
+const HOVER_GLOW_WIDTH = 9;
+
+// Mix a #rrggbb color toward white so the hovered line reads as "lit up".
+function lighten(hex: string, amount: number): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const mix = (c: number) => Math.round(c + (255 - c) * amount);
+  const [r, g, b] = [m[1], m[2], m[3]].map(h => mix(parseInt(h, 16)));
+  return `rgb(${r},${g},${b})`;
+}
+
+function withAlpha(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const [r, g, b] = [m[1], m[2], m[3]].map(h => parseInt(h, 16));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+export function setHoveredColumns(leftCol: number | null, rightCol: number | null): void {
+  if (leftCol === hoveredLeftCol && rightCol === hoveredRightCol) return;
+  hoveredLeftCol = leftCol;
+  hoveredRightCol = rightCol;
+  scheduleHoverDraw();
+}
+
+// Sweeping the pointer across the table crosses a column every few pixels;
+// coalesce into one repaint per frame.
+function scheduleHoverDraw(): void {
+  if (hoverDrawPending) return;
+  hoverDrawPending = true;
+  requestAnimationFrame(() => {
+    hoverDrawPending = false;
+    drawHoverOverlay();
+  });
+}
+
+function getHoverOverlay(): HTMLCanvasElement | null {
+  const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement | null;
+  const parent = canvas?.parentElement;
+  if (!canvas || !parent) return null;
+  if (!hoverOverlay || hoverOverlay.parentElement !== parent) {
+    hoverOverlay = document.createElement('canvas');
+    hoverOverlay.style.cssText = 'position:absolute;pointer-events:none;';
+    // Makes the parent the canvas' offsetParent, so the offsets below line the
+    // overlay up with the chart in both layouts (the compare view puts the
+    // canvas below a header inside the same container).
+    if (!parent.style.position) parent.style.position = 'relative';
+    parent.appendChild(hoverOverlay);
+  }
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (hoverOverlay.width !== Math.round(w * dpr) || hoverOverlay.height !== Math.round(h * dpr)) {
+    hoverOverlay.width = Math.round(w * dpr);
+    hoverOverlay.height = Math.round(h * dpr);
+    hoverOverlay.style.width = `${w}px`;
+    hoverOverlay.style.height = `${h}px`;
+  }
+  hoverOverlay.style.left = `${canvas.offsetLeft}px`;
+  hoverOverlay.style.top = `${canvas.offsetTop}px`;
+  return hoverOverlay;
+}
+
+function hoveredDatasetIndexes(): number[] {
+  if (!chartInstance) return [];
+  const out: number[] = [];
+  chartInstance.data.datasets.forEach((ds: any, i: number) => {
+    const hovered = ds._side === 'right' ? hoveredRightCol : hoveredLeftCol;
+    if (hovered !== null && ds._col === hovered) out.push(i);
+  });
+  return out;
+}
+
+// Reduce a dataset to at most two points per horizontal pixel (its min/max
+// there). Visually identical at line width, but bounded by the canvas width
+// instead of the row count, so a million-row column still repaints instantly.
+function buildHoverPath(dsIndex: number): number[] {
+  const els = chartInstance.getDatasetMeta(dsIndex).data as { x: number; y: number }[];
+  const pts: number[] = [];
+  let curX = NaN, minY = 0, maxY = 0;
+  const flush = () => {
+    if (isNaN(curX)) return;
+    pts.push(curX, minY, curX, maxY);
+  };
+  for (const el of els) {
+    const px = Math.round(el.x);
+    if (px !== curX) {
+      flush();
+      curX = px; minY = el.y; maxY = el.y;
+    } else {
+      if (el.y < minY) minY = el.y;
+      if (el.y > maxY) maxY = el.y;
+    }
+  }
+  flush();
+  return pts;
+}
+
+function getHoverPath(dsIndex: number): number[] {
+  const sx = chartInstance.scales.x;
+  const sy = chartInstance.scales.y;
+  const a = chartInstance.chartArea;
+  const key = `${sx.min},${sx.max},${sy.min},${sy.max},${a.left},${a.right},${a.top},${a.bottom}`;
+  const hit = hoverPathCache.get(dsIndex);
+  if (hit && hit.key === key) return hit.pts;
+  const pts = buildHoverPath(dsIndex);
+  hoverPathCache.set(dsIndex, { key, pts });
+  return pts;
+}
+
+function drawHoverOverlay(): void {
+  const overlay = getHoverOverlay();
+  if (!overlay) return;
+  const ctx = overlay.getContext('2d')!;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+  if (!chartInstance) return;
+  const indexes = hoveredDatasetIndexes();
+  if (indexes.length === 0) return;
+
+  const a = chartInstance.chartArea;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top);
+  ctx.clip();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  for (const i of indexes) {
+    const pts = getHoverPath(i);
+    if (pts.length < 2) continue;
+    const color = chartInstance.data.datasets[i]._color as string;
+    ctx.beginPath();
+    ctx.moveTo(pts[0], pts[1]);
+    for (let p = 2; p < pts.length; p += 2) ctx.lineTo(pts[p], pts[p + 1]);
+    // Wide translucent halo first, then the bright line on top of it.
+    ctx.strokeStyle = withAlpha(color, 0.35);
+    ctx.lineWidth = lineWidth + HOVER_GLOW_WIDTH;
+    ctx.stroke();
+    ctx.strokeStyle = lighten(color, 0.5);
+    ctx.lineWidth = lineWidth + HOVER_EXTRA_WIDTH;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 let extraYValuesCallback: (() => string) | null = null;
 export function setGraphDiffMode(mode: DiffMode): void {
   diffMode = mode;
@@ -179,6 +341,7 @@ function buildDatasets(): any[] {
           data: seg, tension: 0.1, fill: false,
           borderWidth: lineWidth, borderColor: color, backgroundColor: color,
           pointRadius: MARKER_RADIUS[markerStyle] ?? 0, showLine: true,
+          _col: leftCol, _side: 'left', _color: color,
         });
       });
     });
@@ -204,6 +367,7 @@ function buildDatasets(): any[] {
         backgroundColor: color,
         pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
         showLine: true,
+        _col: colIdx, _side: 'left', _color: color,
       });
     });
   });
@@ -233,6 +397,7 @@ function buildDatasets(): any[] {
           backgroundColor: color,
           pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
           showLine: true,
+          _col: colIdx, _side: 'right', _color: color,
         });
       });
     });
@@ -1153,6 +1318,8 @@ function redraw(): void {
   currentMinimap = zoomXMin === null ? null : getMainMinimap(datasets);
 
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  // Dataset indexes and point pixels both belong to the chart being replaced.
+  hoverPathCache.clear();
 
   const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
   chartInstance = new Chart(canvas.getContext('2d')!, {
@@ -1162,6 +1329,9 @@ function redraw(): void {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      // Chart.js re-lays out on its own when the panel is resized; the overlay
+      // canvas has to be resized and redrawn with it.
+      onResize: () => scheduleHoverDraw(),
       plugins: {
         legend: {
           display: dataCols.length > 1 || lastRightData !== undefined,
@@ -1189,6 +1359,8 @@ function redraw(): void {
   });
 
   updateYValues();
+  // The highlight lives on its own canvas, so it has to follow the new geometry.
+  scheduleHoverDraw();
   // Keep the FFT pane in sync with the time graph's visible region.
   scheduleFftRefresh();
 }
@@ -1360,6 +1532,11 @@ export function closeGraph(): void {
   crosshair2OrigRowIdx = null;
   updateYValues();
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  hoveredLeftCol = null;
+  hoveredRightCol = null;
+  hoverPathCache.clear();
+  hoverOverlay?.remove();
+  hoverOverlay = null;
   closeFFTPane();
   document.getElementById('graph-container')!.classList.add('hidden');
 }
