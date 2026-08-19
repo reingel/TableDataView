@@ -17,6 +17,16 @@ const diffCols = new Set<number>();
 const movAvgCols = new Map<number, number>(); // col -> window size
 const hexCols = new Set<number>();
 
+// Per-column display transform: value * scale + offset. Only in effect while the
+// corresponding toolbar row is shown; hiding a row resets it to the identity so
+// the table never displays adjusted numbers without the controls that produced
+// them being visible.
+let scaleRowVisible = false;
+let offsetRowVisible = false;
+let scales: number[] = [];
+let offsets: number[] = [];
+let onChangeCallback: (() => void) | null = null;
+
 export function getData(): ParsedFile | null {
   return currentData;
 }
@@ -152,6 +162,210 @@ function applyHexHeader(col: number): void {
   });
 }
 
+// ---- Scale / offset ----
+
+type SOKind = 'scale' | 'offset';
+
+export type ScaleOffsetState = {
+  scaleVisible: boolean; offsetVisible: boolean;
+  scales: number[]; offsets: number[];
+};
+
+export function isScaleRowVisible(): boolean {
+  return scaleRowVisible;
+}
+
+export function isOffsetRowVisible(): boolean {
+  return offsetRowVisible;
+}
+
+export function getScale(col: number): number {
+  return scaleRowVisible ? (scales[col] ?? 1) : 1;
+}
+
+export function getOffset(col: number): number {
+  return offsetRowVisible ? (offsets[col] ?? 0) : 0;
+}
+
+export function isScaled(col: number): boolean {
+  return getScale(col) !== 1 || getOffset(col) !== 0;
+}
+
+// Floating-point multiply/add on parsed decimals leaves noise (0.1 * 3 ->
+// 0.30000000000000004); 12 significant digits is well inside double precision
+// but past anything a data file realistically carries.
+function formatScaled(n: number): string {
+  if (!isFinite(n)) return String(n);
+  return String(parseFloat(n.toPrecision(12)));
+}
+
+export function applyScaleOffset(col: number, val: string): string {
+  const s = getScale(col);
+  const o = getOffset(col);
+  if (s === 1 && o === 0) return val;
+  const n = parseFloat(val);
+  if (!isFinite(n)) return val;
+  return formatScaled(n * s + o);
+}
+
+// Render whole numbers as "1.0" / "0.0" so the identity values read as decimals.
+function fmtSO(v: number): string {
+  return Number.isInteger(v) ? v.toFixed(1) : String(v);
+}
+
+function soInput(kind: SOKind, col: number): HTMLInputElement | null {
+  return document.querySelector<HTMLInputElement>(`#${kind}-row [data-col-index="${col}"] .so-input`);
+}
+
+function refreshSOCol(col: number): void {
+  const modified = isScaled(col);
+  document.querySelectorAll<HTMLElement>(`#col-index-row [data-col-index="${col}"], #header-row [data-col-index="${col}"]`)
+    .forEach(el => el.classList.toggle('scaled-col', modified));
+  soInput('scale', col)?.classList.toggle('modified', (scales[col] ?? 1) !== 1);
+  soInput('offset', col)?.classList.toggle('modified', (offsets[col] ?? 0) !== 0);
+}
+
+function refreshAllSO(): void {
+  const n = currentData?.headers.length ?? 0;
+  for (let c = 0; c < n; c++) refreshSOCol(c);
+}
+
+function commitSO(kind: SOKind, col: number, input: HTMLInputElement): void {
+  const arr = kind === 'scale' ? scales : offsets;
+  const identity = kind === 'scale' ? 1 : 0;
+  const raw = input.value.trim();
+  let v = raw === '' ? identity : parseFloat(raw);
+  if (!isFinite(v)) v = arr[col] ?? identity;
+  arr[col] = v;
+  input.value = fmtSO(v);
+  refreshSOCol(col);
+  scheduleRender();
+  onChangeCallback?.();
+}
+
+function buildSORow(kind: SOKind, label: string, data: ParsedFile): void {
+  const tr = document.getElementById(`${kind}-row`)!;
+  tr.innerHTML = '';
+  tr.classList.add('hidden');
+
+  const thLabel = document.createElement('th');
+  thLabel.textContent = label;
+  thLabel.className = 'row-num-cell align-right so-label';
+  tr.appendChild(thLabel);
+
+  const identity = kind === 'scale' ? 1 : 0;
+  data.headers.forEach((_, colIdx) => {
+    const th = document.createElement('th');
+    th.dataset.colIndex = String(colIdx);
+    th.className = colIdx === 0 ? 'so-cell col-first' : 'so-cell';
+    applyFixedWidth(th, colIdx);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'so-input';
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.value = fmtSO(identity);
+    input.addEventListener('change', () => commitSO(kind, colIdx, input));
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') {
+        e.preventDefault();
+        input.value = fmtSO((kind === 'scale' ? scales[colIdx] : offsets[colIdx]) ?? identity);
+        input.blur();
+      }
+      e.stopPropagation();
+    });
+    th.appendChild(input);
+    tr.appendChild(th);
+  });
+}
+
+function resetSOValues(kind: SOKind): void {
+  const arr = kind === 'scale' ? scales : offsets;
+  const identity = kind === 'scale' ? 1 : 0;
+  for (let c = 0; c < arr.length; c++) {
+    arr[c] = identity;
+    const input = soInput(kind, c);
+    if (input) input.value = fmtSO(identity);
+  }
+}
+
+// The sticky `top` of each header row depends on the heights of the rows above
+// it, which change as the scale/offset rows are shown or hidden.
+function updateStickyTops(): void {
+  const h = (id: string): number => {
+    const el = document.getElementById(id);
+    if (!el || el.classList.contains('hidden')) return 0;
+    return el.getBoundingClientRect().height;
+  };
+  const colIdxH = h('col-index-row');
+  const headerH = h('header-row');
+  const scaleH = h('scale-row');
+  const style = document.documentElement.style;
+  style.setProperty('--col-index-height', `${colIdxH}px`);
+  style.setProperty('--scale-row-top', `${colIdxH + headerH}px`);
+  style.setProperty('--offset-row-top', `${colIdxH + headerH + scaleH}px`);
+}
+
+function setSORowVisible(kind: SOKind, visible: boolean): void {
+  const wasVisible = kind === 'scale' ? scaleRowVisible : offsetRowVisible;
+  if (visible === wasVisible) return;
+  if (kind === 'scale') scaleRowVisible = visible; else offsetRowVisible = visible;
+  if (!visible) resetSOValues(kind);
+  document.getElementById(`${kind}-row`)?.classList.toggle('hidden', !visible);
+  refreshAllSO();
+  requestAnimationFrame(updateStickyTops);
+  scheduleRender();
+}
+
+export function toggleScaleRow(): void {
+  setSORowVisible('scale', !scaleRowVisible);
+}
+
+export function toggleOffsetRow(): void {
+  setSORowVisible('offset', !offsetRowVisible);
+}
+
+// "Show original values" on a single column: back to scale 1.0 / offset 0.0.
+export function resetScaleOffset(col: number): void {
+  scales[col] = 1;
+  offsets[col] = 0;
+  const sIn = soInput('scale', col);
+  if (sIn) sIn.value = fmtSO(1);
+  const oIn = soInput('offset', col);
+  if (oIn) oIn.value = fmtSO(0);
+  refreshSOCol(col);
+  scheduleRender();
+}
+
+export function clearAllScaleOffset(): void {
+  setSORowVisible('scale', false);
+  setSORowVisible('offset', false);
+}
+
+export function getScaleOffsetSnapshot(): ScaleOffsetState {
+  return {
+    scaleVisible: scaleRowVisible, offsetVisible: offsetRowVisible,
+    scales: scales.slice(), offsets: offsets.slice(),
+  };
+}
+
+export function restoreScaleOffset(s: ScaleOffsetState): void {
+  setSORowVisible('scale', s.scaleVisible);
+  setSORowVisible('offset', s.offsetVisible);
+  for (let c = 0; c < scales.length; c++) {
+    scales[c] = s.scales[c] ?? 1;
+    offsets[c] = s.offsets[c] ?? 0;
+    const sIn = soInput('scale', c);
+    if (sIn) sIn.value = fmtSO(scales[c]);
+    const oIn = soInput('offset', c);
+    if (oIn) oIn.value = fmtSO(offsets[c]);
+    refreshSOCol(c);
+  }
+  scheduleRender();
+}
+
 export function setCrosshairRow(rowIdx: number | null, colIdxs: number[]): void {
   crosshairRowIdx = rowIdx;
   crosshairColIdxs = colIdxs;
@@ -246,7 +460,8 @@ function fixStickyWidths(data: ParsedFile): void {
   const PX_PER_CHAR = 9;
   const PADDING = 24;
 
-  const rowNumPx = Math.max(String(data.rows.length).length * PX_PER_CHAR + PADDING, 40);
+  // The floor also has to fit the "Offset" label in the scale/offset rows.
+  const rowNumPx = Math.max(String(data.rows.length).length * PX_PER_CHAR + PADDING, 54);
   document.documentElement.style.setProperty('--row-num-width', `${rowNumPx}px`);
 
   const n = data.rows.length;
@@ -271,6 +486,11 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   diffCols.clear();
   movAvgCols.clear();
   hexCols.clear();
+  scaleRowVisible = false;
+  offsetRowVisible = false;
+  scales = new Array(data.headers.length).fill(1);
+  offsets = new Array(data.headers.length).fill(0);
+  onChangeCallback = onSelectionChange;
 
   initSelector(data.headers.length, onSelectionChange, detectDefaultXAxis(data.headers, data.rows));
 
@@ -312,6 +532,9 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     headerRow.appendChild(th);
   });
 
+  buildSORow('scale', 'Scale', data);
+  buildSORow('offset', 'Offset', data);
+
   const container = document.getElementById('table-container')!;
   container.removeEventListener('scroll', onScroll);
   container.addEventListener('scroll', onScroll, { passive: true });
@@ -329,10 +552,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
     if (rowNumTh) {
       document.documentElement.style.setProperty('--row-num-width', `${rowNumTh.offsetWidth}px`);
     }
-    const colIndexRowEl = document.getElementById('col-index-row');
-    if (colIndexRowEl) {
-      document.documentElement.style.setProperty('--col-index-height', `${colIndexRowEl.getBoundingClientRect().height}px`);
-    }
+    updateStickyTops();
   });
 }
 
@@ -422,6 +642,10 @@ function renderBody(): void {
         extraCls = ' movavg-col';
       } else {
         displayVal = row[j];
+      }
+      if (isScaled(j)) {
+        displayVal = applyScaleOffset(j, displayVal);
+        extraCls += ' scaled-col';
       }
       if (inHex) {
         displayVal = toHexDisplay(displayVal);

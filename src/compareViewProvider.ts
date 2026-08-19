@@ -214,6 +214,32 @@ export class CompareViewProvider {
     .header-row th {
       top: var(--col-index-height, 0px);
     }
+    .scale-row th  { top: var(--scale-row-top, 0px); }
+    .offset-row th { top: var(--offset-row-top, 0px); }
+    .scale-row th, .offset-row th { padding: 1px 4px; }
+    th.so-label {
+      font-size: 0.75em;
+      font-weight: normal;
+      color: var(--vscode-descriptionForeground);
+      cursor: default;
+    }
+    .so-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0 4px;
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #ccc);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 3px;
+      outline: none;
+      font-family: inherit;
+      font-size: 0.85em;
+      text-align: right;
+      cursor: text;
+      user-select: text;
+    }
+    .so-input:focus { border-color: var(--vscode-focusBorder, #007acc); }
+    .so-input.modified { color: #d8a0e0; font-weight: bold; }
     th.selected {
       background: var(--vscode-editorGroupHeader-tabsBackground, #2d2d2d);
       box-shadow: inset 0 0 0 9999px var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.4));
@@ -440,6 +466,8 @@ export class CompareViewProvider {
     td.movavg-col { color: #7ec8e8; }
     th.hex-col { color: #e8c87e; }
     td.hex-col { color: #e8c87e; }
+    th.scaled-col { color: #d8a0e0; }
+    td.scaled-col { color: #d8a0e0; }
     td.col-has-diff { background: rgba(210, 60, 60, 0.35) !important; }
     th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(210, 60, 60, 0.35); }
     td.value-diff { background: rgba(210, 60, 60, 0.35) !important; }
@@ -467,7 +495,8 @@ export class CompareViewProvider {
       flex-shrink: 0;
     }
     #graph-resize-handle:hover { background: var(--vscode-focusBorder, #007acc); }
-    #chart-canvas { flex: 1; min-height: 0; cursor: crosshair; }
+    #chart-canvas-wrapper { flex: 1; min-height: 0; overflow: hidden; }
+    #chart-canvas { width: 100%; height: 100%; cursor: crosshair; }
   </style>
 </head>
 <body>
@@ -477,6 +506,8 @@ export class CompareViewProvider {
     <button id="btn-left">Left</button>
     <button id="btn-right">Right</button>
     <div class="toolbar-sep"></div>
+    <button id="btn-scale" title="Show the per-column scale row">Scale</button>
+    <button id="btn-offset" title="Show the per-column offset row">Offset</button>
     <button id="btn-show-graph" disabled>Show Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
     <div class="toolbar-sep"></div>
@@ -496,6 +527,8 @@ export class CompareViewProvider {
           <thead>
             <tr id="left-col-index-row" class="col-index-row"></tr>
             <tr id="left-header-row" class="header-row"></tr>
+            <tr id="left-scale-row" class="scale-row hidden"></tr>
+            <tr id="left-offset-row" class="offset-row hidden"></tr>
           </thead>
           <tbody id="left-data-body"></tbody>
         </table>
@@ -506,6 +539,8 @@ export class CompareViewProvider {
           <thead>
             <tr id="right-col-index-row" class="col-index-row"></tr>
             <tr id="right-header-row" class="header-row"></tr>
+            <tr id="right-scale-row" class="scale-row hidden"></tr>
+            <tr id="right-offset-row" class="offset-row hidden"></tr>
           </thead>
           <tbody id="right-data-body"></tbody>
         </table>
@@ -591,8 +626,7 @@ export class CompareViewProvider {
       </label>
       <button id="btn-close-graph">&#x2715; Close</button>
     </div>
-    <div id="graph-yvalues" class="hidden"></div>
-    <canvas id="chart-canvas"></canvas>
+    <div id="chart-canvas-wrapper"><canvas id="chart-canvas"></canvas></div>
   </div>
 
   <script nonce="${nonce}" src="${scriptUri}"></script>

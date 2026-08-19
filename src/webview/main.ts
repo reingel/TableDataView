@@ -1,5 +1,5 @@
 import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, toggleScaleRow, toggleOffsetRow, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
 import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
@@ -16,6 +16,7 @@ type ReloadState = {
   headers: string[];
   selectedCols: number[]; xAxisCol: number;
   diffCols: number[]; movAvgCols: Array<[number, number]>; hexCols: number[];
+  scaleOffset: ScaleOffsetState;
 };
 let pendingReload: ReloadState | null = null;
 
@@ -27,6 +28,7 @@ function saveReloadState(): void {
     headers: currentData.headers.slice(),
     selectedCols: getSelected(), xAxisCol: getXAxisCol(),
     diffCols: getDiffColsSnapshot(), movAvgCols: getMovAvgColsSnapshot(), hexCols: getHexColsSnapshot(),
+    scaleOffset: getScaleOffsetSnapshot(),
   };
 }
 
@@ -37,6 +39,7 @@ function restoreReloadState(headers: string[]): void {
   for (const col of s.diffCols) setDiff(col);
   for (const [col, ws] of s.movAvgCols) setMovAvg(col, ws);
   for (const col of s.hexCols) setHex(col);
+  restoreScaleOffset(s.scaleOffset);
   restoreSelection(s.selectedCols, s.xAxisCol);
   requestAnimationFrame(() => {
     const c = document.getElementById('table-container')!;
@@ -48,7 +51,10 @@ function restoreReloadState(headers: string[]): void {
 function updateToolbar(): void {
   const selected = getSelected();
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
-  const hasCustomState = getXAxisCol() !== getDefaultXAxisCol() || hasDiff() || hasMovAvg() || hasHex();
+  document.getElementById('btn-scale')!.classList.toggle('active', isScaleRowVisible());
+  document.getElementById('btn-offset')!.classList.toggle('active', isOffsetRowVisible());
+  const hasCustomState = getXAxisCol() !== getDefaultXAxisCol() || hasDiff() || hasMovAvg() || hasHex()
+    || isScaleRowVisible() || isOffsetRowVisible();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   updateHeaderPanelSelection();
   const graphContainer = document.getElementById('graph-container')!;
@@ -75,10 +81,13 @@ function isXAxisOriginal(): boolean {
 
 function getEffectiveValue(rowIdx: number, colIdx: number): string {
   if (!currentData) return '';
-  if (isDiff(colIdx)) return getDiffValue(rowIdx, colIdx);
-  const ws = getMovAvgWindowSize(colIdx);
-  if (ws !== undefined) return getMovAvgValue(rowIdx, colIdx, ws);
-  return currentData.rows[rowIdx][colIdx];
+  let val: string;
+  if (isDiff(colIdx)) val = getDiffValue(rowIdx, colIdx);
+  else {
+    const ws = getMovAvgWindowSize(colIdx);
+    val = ws !== undefined ? getMovAvgValue(rowIdx, colIdx, ws) : currentData.rows[rowIdx][colIdx];
+  }
+  return applyScaleOffset(colIdx, val);
 }
 
 function getEffectiveRows(): string[][] {
@@ -86,10 +95,13 @@ function getEffectiveRows(): string[][] {
   if (currentData.rows.length === 0) return [];
   return currentData.rows.map((row, i) =>
     row.map((val, j) => {
-      if (isDiff(j)) return getDiffValue(i, j);
-      const ws = getMovAvgWindowSize(j);
-      if (ws !== undefined) return getMovAvgValue(i, j, ws);
-      return val;
+      let v: string;
+      if (isDiff(j)) v = getDiffValue(i, j);
+      else {
+        const ws = getMovAvgWindowSize(j);
+        v = ws !== undefined ? getMovAvgValue(i, j, ws) : val;
+      }
+      return applyScaleOffset(j, v);
     })
   );
 }
@@ -417,6 +429,7 @@ function showColumnContextMenu(clientX: number, clientY: number, colIndex: numbe
     movAvgWindowSize: colIndex >= 0 ? getMovAvgWindowSize(colIndex) : undefined,
     xAxisIsDefault: getXAxisCol() === getDefaultXAxisCol(),
     isHex: colIndex >= 0 && isHex(colIndex),
+    isScaled: colIndex >= 0 && isScaled(colIndex),
     stats: colStats,
   });
 }
@@ -558,6 +571,8 @@ function initColSearch(): void {
 function addDragScroll(container: HTMLElement): void {
   container.addEventListener('mousedown', (e: MouseEvent) => {
     if (e.button !== 0) return;
+    // Don't hijack drags that start inside a scale/offset input — those select text.
+    if ((e.target as HTMLElement).closest('input, select, textarea')) return;
     const startX = e.clientX;
     const startY = e.clientY;
     const startScrollLeft = container.scrollLeft;
@@ -603,7 +618,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resetXAxis: () => { resetXAxis(); updateToolbar(); },
     setXAxis: (col) => { setXAxisCol(col); updateToolbar(); },
     showDiff: (col) => { setDiff(col); updateToolbar(); },
-    showOriginal: (col) => { clearDiff(col); clearMovAvg(col); clearHex(col); updateToolbar(); },
+    showOriginal: (col) => { clearDiff(col); clearMovAvg(col); clearHex(col); resetScaleOffset(col); updateToolbar(); },
     showMovAvg: (col, windowSize) => { setMovAvg(col, windowSize); updateToolbar(); },
     showHex: (col) => { setHex(col); updateToolbar(); },
     findNextChange: (col, startRow) => findChange(col, startRow, 1),
@@ -712,12 +727,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const c = document.getElementById('table-container')!;
     c.scrollLeft = c.scrollWidth;
   });
+  document.getElementById('btn-scale')!.addEventListener('click', () => { toggleScaleRow(); updateToolbar(); });
+  document.getElementById('btn-offset')!.addEventListener('click', () => { toggleOffsetRow(); updateToolbar(); });
   document.getElementById('btn-show-graph')!.addEventListener('click', handleShowGraph);
   document.getElementById('btn-reset-all')!.addEventListener('click', () => {
     resetXAxis();
     clearAllDiff();
     clearAllMovAvg();
     clearAllHex();
+    clearAllScaleOffset();
     updateToolbar();
   });
   document.getElementById('btn-reload')!.addEventListener('click', () => {

@@ -26,6 +26,14 @@ let matchOverrides = new Map<number, number | null>();
 const diffCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 const movAvgCols: Record<Side, Map<number, number>> = { left: new Map(), right: new Map() };
 const hexCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
+// Per-column display transform: value * scale + offset. Shown/hidden together
+// for both panes by the toolbar buttons; hiding a row resets it to the identity
+// so the tables never show adjusted numbers without the controls that produced
+// them being visible.
+let scaleRowVisible = false;
+let offsetRowVisible = false;
+const scales: Record<Side, number[]> = { left: [], right: [] };
+const offsets: Record<Side, number[]> = { left: [], right: [] };
 const xAxisCol: Record<Side, number> = { left: SEQ_X, right: SEQ_X };
 const defaultXAxisCol: Record<Side, number> = { left: SEQ_X, right: SEQ_X };
 const selectedCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
@@ -56,6 +64,9 @@ type CompareReloadState = {
   diffL: number[]; diffR: number[];
   movAvgL: Array<[number, number]>; movAvgR: Array<[number, number]>;
   hexL: number[]; hexR: number[];
+  scaleVisible: boolean; offsetVisible: boolean;
+  scalesL: number[]; scalesR: number[];
+  offsetsL: number[]; offsetsR: number[];
 };
 let pendingReload: CompareReloadState | null = null;
 
@@ -265,11 +276,15 @@ function updateToolbar(): void {
   const hasRight = selectedCols.right.size > 0;
   (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = !hasLeft && !hasRight;
 
+  document.getElementById('btn-scale')!.classList.toggle('active', scaleRowVisible);
+  document.getElementById('btn-offset')!.classList.toggle('active', offsetRowVisible);
+
   const hasCustomState =
     xAxisCol.left !== defaultXAxisCol.left || xAxisCol.right !== defaultXAxisCol.right ||
     diffCols.left.size > 0 || diffCols.right.size > 0 ||
     movAvgCols.left.size > 0 || movAvgCols.right.size > 0 ||
-    hexCols.left.size > 0 || hexCols.right.size > 0;
+    hexCols.left.size > 0 || hexCols.right.size > 0 ||
+    scaleRowVisible || offsetRowVisible;
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
 
   updateHeaderPanelSelection();
@@ -321,10 +336,13 @@ function getMovAvgValue(side: Side, rowIdx: number, colIdx: number, windowSize: 
 function getCellValue(side: Side, rowIdx: number, colIdx: number): string {
   const data = side === 'left' ? leftData : rightData;
   if (!data) return '';
-  if (diffCols[side].has(colIdx)) return getDiffValue(side, rowIdx, colIdx);
-  const ws = movAvgCols[side].get(colIdx);
-  if (ws !== undefined) return getMovAvgValue(side, rowIdx, colIdx, ws);
-  return data.rows[rowIdx]?.[colIdx] ?? '';
+  let val: string;
+  if (diffCols[side].has(colIdx)) val = getDiffValue(side, rowIdx, colIdx);
+  else {
+    const ws = movAvgCols[side].get(colIdx);
+    val = ws !== undefined ? getMovAvgValue(side, rowIdx, colIdx, ws) : (data.rows[rowIdx]?.[colIdx] ?? '');
+  }
+  return applyScaleOffset(side, colIdx, val);
 }
 
 function getEffectiveRows(side: Side): string[][] {
@@ -404,6 +422,10 @@ function renderBody(side: Side): void {
         extraCls = ' movavg-col';
       } else {
         displayVal = row[j];
+      }
+      if (isScaled(side, j)) {
+        displayVal = applyScaleOffset(side, j, displayVal);
+        extraCls += ' scaled-col';
       }
       if (inHex) {
         displayVal = toHexDisplay(displayVal);
@@ -558,6 +580,187 @@ function clearHex(side: Side, colIdx: number): void {
   updateToolbar();
 }
 
+// ---- Scale / offset (synced between sides) ----
+
+type SOKind = 'scale' | 'offset';
+
+function soArr(kind: SOKind, side: Side): number[] {
+  return kind === 'scale' ? scales[side] : offsets[side];
+}
+
+function soIdentity(kind: SOKind): number {
+  return kind === 'scale' ? 1 : 0;
+}
+
+function getScale(side: Side, col: number): number {
+  return scaleRowVisible ? (scales[side][col] ?? 1) : 1;
+}
+
+function getOffset(side: Side, col: number): number {
+  return offsetRowVisible ? (offsets[side][col] ?? 0) : 0;
+}
+
+function isScaled(side: Side, col: number): boolean {
+  return getScale(side, col) !== 1 || getOffset(side, col) !== 0;
+}
+
+// Floating-point multiply/add on parsed decimals leaves noise (0.1 * 3 ->
+// 0.30000000000000004); 12 significant digits is well inside double precision
+// but past anything a data file realistically carries.
+function formatScaled(n: number): string {
+  if (!isFinite(n)) return String(n);
+  return String(parseFloat(n.toPrecision(12)));
+}
+
+function applyScaleOffset(side: Side, col: number, val: string): string {
+  const sc = getScale(side, col);
+  const off = getOffset(side, col);
+  if (sc === 1 && off === 0) return val;
+  const n = parseFloat(val);
+  if (!isFinite(n)) return val;
+  return formatScaled(n * sc + off);
+}
+
+// Render whole numbers as "1.0" / "0.0" so the identity values read as decimals.
+function fmtSO(v: number): string {
+  return Number.isInteger(v) ? v.toFixed(1) : String(v);
+}
+
+function soInput(kind: SOKind, side: Side, col: number): HTMLInputElement | null {
+  return document.querySelector<HTMLInputElement>(`#${side}-${kind}-row [data-col-index="${col}"] .so-input`);
+}
+
+function refreshSOCol(side: Side, col: number): void {
+  const modified = isScaled(side, col);
+  document.querySelectorAll<HTMLElement>(`#${side}-col-index-row [data-col-index="${col}"], #${side}-header-row [data-col-index="${col}"]`)
+    .forEach(el => el.classList.toggle('scaled-col', modified));
+  soInput('scale', side, col)?.classList.toggle('modified', (scales[side][col] ?? 1) !== 1);
+  soInput('offset', side, col)?.classList.toggle('modified', (offsets[side][col] ?? 0) !== 0);
+}
+
+function refreshAllSO(): void {
+  for (const side of ['left', 'right'] as Side[]) {
+    const n = (side === 'left' ? leftData : rightData)?.headers.length ?? 0;
+    for (let c = 0; c < n; c++) refreshSOCol(side, c);
+  }
+}
+
+// Writes one side's value and mirrors it onto the matched column opposite, the
+// same way diff / moving average / x-axis changes are mirrored.
+function setSOValue(kind: SOKind, side: Side, col: number, v: number): void {
+  const write = (sd: Side, c: number) => {
+    soArr(kind, sd)[c] = v;
+    const input = soInput(kind, sd, c);
+    if (input) input.value = fmtSO(v);
+    refreshSOCol(sd, c);
+  };
+  write(side, col);
+  const mi = getMappedCol(side, col);
+  if (mi !== undefined) write(otherSide(side), mi);
+}
+
+function commitSO(kind: SOKind, side: Side, col: number, input: HTMLInputElement): void {
+  const identity = soIdentity(kind);
+  const raw = input.value.trim();
+  let v = raw === '' ? identity : parseFloat(raw);
+  if (!isFinite(v)) v = soArr(kind, side)[col] ?? identity;
+  setSOValue(kind, side, col, v);
+  scheduleRender();
+  updateToolbar();
+}
+
+function buildSORow(kind: SOKind, side: Side, label: string, data: ParsedFile): void {
+  const tr = document.getElementById(`${side}-${kind}-row`)!;
+  tr.innerHTML = '';
+  tr.classList.toggle('hidden', !(kind === 'scale' ? scaleRowVisible : offsetRowVisible));
+
+  const thLabel = document.createElement('th');
+  thLabel.textContent = label;
+  thLabel.className = 'row-num-cell align-right so-label';
+  tr.appendChild(thLabel);
+
+  const identity = soIdentity(kind);
+  data.headers.forEach((_, colIdx) => {
+    const th = document.createElement('th');
+    th.dataset.colIndex = String(colIdx);
+    th.dataset.side = side;
+    th.className = colIdx === 0 ? 'so-cell col-first' : 'so-cell';
+    applyFixedWidth(th, side, colIdx);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'so-input';
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.value = fmtSO(soArr(kind, side)[colIdx] ?? identity);
+    input.addEventListener('change', () => commitSO(kind, side, colIdx, input));
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') {
+        e.preventDefault();
+        input.value = fmtSO(soArr(kind, side)[colIdx] ?? identity);
+        input.blur();
+      }
+      e.stopPropagation();
+    });
+    th.appendChild(input);
+    tr.appendChild(th);
+  });
+}
+
+function resetSOValues(kind: SOKind): void {
+  const identity = soIdentity(kind);
+  for (const side of ['left', 'right'] as Side[]) {
+    const arr = soArr(kind, side);
+    for (let c = 0; c < arr.length; c++) {
+      arr[c] = identity;
+      const input = soInput(kind, side, c);
+      if (input) input.value = fmtSO(identity);
+    }
+  }
+}
+
+// The sticky `top` of each header row depends on the heights of the rows above
+// it, which change as the scale/offset rows are shown or hidden.
+function updateStickyTops(): void {
+  const h = (id: string): number => {
+    const el = document.getElementById(id);
+    if (!el || el.classList.contains('hidden')) return 0;
+    return el.getBoundingClientRect().height;
+  };
+  const colIdxH = h('left-col-index-row');
+  const headerH = h('left-header-row');
+  const scaleH = h('left-scale-row');
+  const style = document.documentElement.style;
+  style.setProperty('--col-index-height', `${colIdxH}px`);
+  style.setProperty('--scale-row-top', `${colIdxH + headerH}px`);
+  style.setProperty('--offset-row-top', `${colIdxH + headerH + scaleH}px`);
+}
+
+function setSORowVisible(kind: SOKind, visible: boolean): void {
+  const wasVisible = kind === 'scale' ? scaleRowVisible : offsetRowVisible;
+  if (visible === wasVisible) return;
+  if (kind === 'scale') scaleRowVisible = visible; else offsetRowVisible = visible;
+  if (!visible) resetSOValues(kind);
+  for (const side of ['left', 'right'] as Side[]) {
+    document.getElementById(`${side}-${kind}-row`)?.classList.toggle('hidden', !visible);
+  }
+  refreshAllSO();
+  requestAnimationFrame(updateStickyTops);
+  scheduleRender();
+}
+
+// "Show original values" on a single column: back to scale 1.0 / offset 0.0.
+function resetScaleOffset(side: Side, col: number): void {
+  setSOValue('scale', side, col, 1);
+  setSOValue('offset', side, col, 0);
+}
+
+function clearAllScaleOffset(): void {
+  setSORowVisible('scale', false);
+  setSORowVisible('offset', false);
+}
+
 function applyRowHighlight(side: Side): void {
   const tableId = `#${side}-data-body`;
   document.querySelectorAll(`${tableId} td.crosshair-row`).forEach(el => el.classList.remove('crosshair-row'));
@@ -623,6 +826,7 @@ function clearTransform(side: Side, colIdx: number): void {
     applyMovAvgHeader(other, mi);
     applyHexHeader(other, mi);
   }
+  resetScaleOffset(side, colIdx);
   scheduleRender();
   updateToolbar();
 }
@@ -737,6 +941,9 @@ function saveCompareReloadState(): void {
     diffL: Array.from(diffCols.left), diffR: Array.from(diffCols.right),
     movAvgL: Array.from(movAvgCols.left.entries()), movAvgR: Array.from(movAvgCols.right.entries()),
     hexL: Array.from(hexCols.left), hexR: Array.from(hexCols.right),
+    scaleVisible: scaleRowVisible, offsetVisible: offsetRowVisible,
+    scalesL: scales.left.slice(), scalesR: scales.right.slice(),
+    offsetsL: offsets.left.slice(), offsetsR: offsets.right.slice(),
   };
 }
 
@@ -753,6 +960,19 @@ function restoreCompareReloadState(): void {
   for (const [c, w] of s.movAvgR) { movAvgCols.right.set(c, w); applyMovAvgHeader('right', c); }
   for (const c of s.hexL) { hexCols.left.add(c); applyHexHeader('left', c); }
   for (const c of s.hexR) { hexCols.right.add(c); applyHexHeader('right', c); }
+  setSORowVisible('scale', s.scaleVisible);
+  setSORowVisible('offset', s.offsetVisible);
+  for (const [side, sc, off] of [['left', s.scalesL, s.offsetsL], ['right', s.scalesR, s.offsetsR]] as Array<[Side, number[], number[]]>) {
+    for (let c = 0; c < scales[side].length; c++) {
+      scales[side][c] = sc[c] ?? 1;
+      offsets[side][c] = off[c] ?? 0;
+      const sIn = soInput('scale', side, c);
+      if (sIn) sIn.value = fmtSO(scales[side][c]);
+      const oIn = soInput('offset', side, c);
+      if (oIn) oIn.value = fmtSO(offsets[side][c]);
+      refreshSOCol(side, c);
+    }
+  }
   xAxisCol.left = s.xAxisL; xAxisCol.right = s.xAxisR;
   selectedCols.left = new Set(s.selectedL);
   selectedCols.right = new Set(s.selectedR);
@@ -775,6 +995,7 @@ function resetAll(): void {
   diffCols.left.clear(); diffCols.right.clear();
   movAvgCols.left.clear(); movAvgCols.right.clear();
   hexCols.left.clear(); hexCols.right.clear();
+  clearAllScaleOffset();
   if (leftData) {
     for (let i = 0; i < leftData.headers.length; i++) {
       applyDiffHeader('left', i);
@@ -866,7 +1087,8 @@ function applyFixedWidth(el: HTMLElement, side: Side, colIdx: number): void {
 }
 
 function initPane(side: Side, data: ParsedFile): void {
-  const rowNumPx = Math.max(String(displayRowCount).length * PX_PER_CHAR + PADDING, 40);
+  // The floor also has to fit the "Offset" label in the scale/offset rows.
+  const rowNumPx = Math.max(String(displayRowCount).length * PX_PER_CHAR + PADDING, 54);
   const table = document.getElementById(`${side}-table`)!;
   table.style.setProperty('--row-num-width', `${rowNumPx}px`);
 
@@ -916,6 +1138,19 @@ function initPane(side: Side, data: ParsedFile): void {
     headerRow.appendChild(th);
   });
 
+  // Keep any values the user already entered when the pane is rebuilt (swap,
+  // re-match); grow/shrink to the new column count.
+  const colCount = data.headers.length;
+  scales[side].length = colCount;
+  offsets[side].length = colCount;
+  for (let i = 0; i < colCount; i++) {
+    if (scales[side][i] === undefined) scales[side][i] = 1;
+    if (offsets[side][i] === undefined) offsets[side][i] = 0;
+  }
+  buildSORow('scale', side, 'Scale', data);
+  buildSORow('offset', side, 'Offset', data);
+  for (let i = 0; i < colCount; i++) refreshSOCol(side, i);
+
   // Initial column selection: col 0. The x-axis defaults to the row sequence
   // unless the first column looks like an index/time axis.
   selectedCols[side].clear();
@@ -932,10 +1167,7 @@ function initPane(side: Side, data: ParsedFile): void {
       const h = firstRow.getBoundingClientRect().height;
       if (h > 0) ROW_HEIGHT = h;
     }
-    const rowNumTh = document.querySelector(`#${side}-table th.row-num-cell`) as HTMLElement | null;
-    if (rowNumTh) {
-      document.documentElement.style.setProperty('--col-index-height', `${rowNumTh.getBoundingClientRect().height}px`);
-    }
+    updateStickyTops();
   });
 }
 
@@ -1094,7 +1326,10 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   const isDiff = colIndex >= 0 && diffCols[side].has(colIndex);
   const movAvgWin = colIndex >= 0 ? movAvgCols[side].get(colIndex) : undefined;
   const isHexCol = colIndex >= 0 && hexCols[side].has(colIndex);
-  const isTransformed = isDiff || movAvgWin !== undefined || isHexCol;
+  // Scale/offset is orthogonal to the value transforms, so it only affects
+  // whether "Show original values" is offered — not the diff/movavg entries.
+  const isValueTransformed = isDiff || movAvgWin !== undefined || isHexCol;
+  const isTransformed = isValueTransformed || (colIndex >= 0 && isScaled(side, colIndex));
   const xAxisIsDefault = xAxisCol[side] === defaultXAxisCol[side];
 
   const setItemVisible = (id: string, visible: boolean) =>
@@ -1103,7 +1338,7 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-reset-xaxis', isXAxis && !xAxisIsDefault);
   setItemVisible('ctx-set-xaxis', colIndex >= 0 && !isXAxis);
   setItemVisible('ctx-show-hex', colIndex >= 0 && !isHexCol);
-  setItemVisible('ctx-show-diff', colIndex >= 0 && !isTransformed);
+  setItemVisible('ctx-show-diff', colIndex >= 0 && !isValueTransformed);
   setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 10);
   setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 30);
   setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !isDiff && !isHexCol && movAvgWin !== 100);
@@ -1257,6 +1492,8 @@ function swapSides(): void {
   [diffCols.left, diffCols.right] = [diffCols.right, diffCols.left];
   [movAvgCols.left, movAvgCols.right] = [movAvgCols.right, movAvgCols.left];
   [hexCols.left, hexCols.right] = [hexCols.right, hexCols.left];
+  [scales.left, scales.right] = [scales.right, scales.left];
+  [offsets.left, offsets.right] = [offsets.right, offsets.left];
   [colWidths.left, colWidths.right] = [colWidths.right, colWidths.left];
   [lastClickedCol.left, lastClickedCol.right] = [lastClickedCol.right, lastClickedCol.left];
 
@@ -1340,15 +1577,15 @@ function showCellTooltip(td: HTMLElement): void {
   tip.style.top = `${y}px`;
 }
 
-// Hovering a column in either pane lights up its line in the graph, together
-// with the line of the column it is matched to on the other side.
+// Hovering a column in either pane lights up that column's line in the graph.
+// Only the hovered side lights up: the matched column on the other side keeps
+// its normal styling so the two lines stay distinguishable.
 function initColumnHover(side: Side, container: HTMLElement): void {
   container.addEventListener('mouseover', e => {
     const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-col-index]');
     const col = cell ? parseInt(cell.dataset.colIndex!, 10) : NaN;
     if (isNaN(col)) { setHoveredColumns(null, null); return; }
-    const other = getMappedCol(side, col) ?? null;
-    setHoveredColumns(side === 'left' ? col : other, side === 'left' ? other : col);
+    setHoveredColumns(side === 'left' ? col : null, side === 'left' ? null : col);
   });
   container.addEventListener('mouseleave', () => setHoveredColumns(null, null));
 }
@@ -1616,6 +1853,8 @@ function initColSearch(): void {
 function addDragScroll(container: HTMLElement): void {
   container.addEventListener('mousedown', (e: MouseEvent) => {
     if (e.button !== 0) return;
+    // Don't hijack drags that start inside a scale/offset input — those select text.
+    if ((e.target as HTMLElement).closest('input, select, textarea')) return;
     const startX = e.clientX;
     const startY = e.clientY;
     const startScrollLeft = container.scrollLeft;
@@ -1801,6 +2040,8 @@ document.addEventListener('DOMContentLoaded', () => {
     syncViewport();
   });
 
+  document.getElementById('btn-scale')!.addEventListener('click', () => { setSORowVisible('scale', !scaleRowVisible); updateToolbar(); });
+  document.getElementById('btn-offset')!.addEventListener('click', () => { setSORowVisible('offset', !offsetRowVisible); updateToolbar(); });
   document.getElementById('btn-reset-all')!.addEventListener('click', resetAll);
   document.getElementById('btn-swap')!.addEventListener('click', swapSides);
   document.getElementById('btn-reload')!.addEventListener('click', () => {

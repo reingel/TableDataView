@@ -72,16 +72,20 @@ export function show(x: number, y: number, colIndex: number, rowIndex: number, o
   movAvgWindowSize: number | undefined;
   xAxisIsDefault: boolean;
   isHex: boolean;
+  isScaled: boolean;
   stats?: { max: number; min: number; mean: number; nanCount: number } | null;
 }): void {
   rightClickedCol = colIndex;
   rightClickedRow = rowIndex;
 
-  const isTransformed = opts.isDiff || opts.movAvgWindowSize !== undefined || opts.isHex;
+  // Scale/offset is orthogonal to the value transforms, so it only affects
+  // whether "Show original values" is offered — not the diff/movavg entries.
+  const isValueTransformed = opts.isDiff || opts.movAvgWindowSize !== undefined || opts.isHex;
+  const isTransformed = isValueTransformed || opts.isScaled;
   setItemVisible('ctx-reset-xaxis', opts.isXAxis && !opts.xAxisIsDefault);
   setItemVisible('ctx-set-xaxis', colIndex >= 0 && !opts.isXAxis);
   setItemVisible('ctx-show-hex', colIndex >= 0 && !opts.isHex);
-  setItemVisible('ctx-show-diff', colIndex >= 0 && !isTransformed);
+  setItemVisible('ctx-show-diff', colIndex >= 0 && !isValueTransformed);
   setItemVisible('ctx-show-movavg-10', colIndex >= 0 && !opts.isDiff && !opts.isHex && opts.movAvgWindowSize !== 10);
   setItemVisible('ctx-show-movavg-30', colIndex >= 0 && !opts.isDiff && !opts.isHex && opts.movAvgWindowSize !== 30);
   setItemVisible('ctx-show-movavg-100', colIndex >= 0 && !opts.isDiff && !opts.isHex && opts.movAvgWindowSize !== 100);

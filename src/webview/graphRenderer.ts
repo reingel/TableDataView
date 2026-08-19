@@ -183,6 +183,12 @@ function hoveredDatasetIndexes(): number[] {
   if (!chartInstance) return [];
   const out: number[] = [];
   chartInstance.data.datasets.forEach((ds: any, i: number) => {
+    // A difference series stands for both columns of a matched pair, so it
+    // lights up from whichever side is hovered.
+    if (ds._rightCol !== undefined && hoveredRightCol !== null && ds._rightCol === hoveredRightCol) {
+      out.push(i);
+      return;
+    }
     const hovered = ds._side === 'right' ? hoveredRightCol : hoveredLeftCol;
     if (hovered !== null && ds._col === hovered) out.push(i);
   });
@@ -235,6 +241,13 @@ function drawHoverOverlay(): void {
   ctx.clearRect(0, 0, overlay.width, overlay.height);
 
   if (!chartInstance) return;
+  // Chart.js element coordinates are in the size it last measured; if the
+  // canvas is currently laid out at a different size (mid-resize, or a
+  // container that squashes it) the bitmap is scaled into that box, so scale
+  // the overlay the same way instead of drawing the path where it isn't.
+  const sx = chartInstance.width ? overlay.clientWidth / chartInstance.width : 1;
+  const sy = chartInstance.height ? overlay.clientHeight / chartInstance.height : 1;
+  if (sx !== 1 || sy !== 1) ctx.setTransform(dpr * sx, 0, 0, dpr * sy, 0, 0);
   const indexes = hoveredDatasetIndexes();
   if (indexes.length === 0) return;
 
@@ -341,7 +354,7 @@ function buildDatasets(): any[] {
           data: seg, tension: 0.1, fill: false,
           borderWidth: lineWidth, borderColor: color, backgroundColor: color,
           pointRadius: MARKER_RADIUS[markerStyle] ?? 0, showLine: true,
-          _col: leftCol, _side: 'left', _color: color,
+          _col: leftCol, _rightCol: rc, _side: 'left', _color: color,
         });
       });
     });

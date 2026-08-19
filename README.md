@@ -44,7 +44,7 @@ Right-click any cell to access column-specific actions:
 | **Show in hex** | Displays column values as hexadecimal with a `0x` prefix (highlighted in yellow). |
 | **Show numerical differences** | Replaces values with row-to-row differences `value[k] − value[k−1]`; first row is set to 0 (highlighted in green). |
 | **Show moving averages (n=10/30/100/1000)** | Replaces values with a rolling average over the last n rows (highlighted in blue). |
-| **Show original values** | Restores the original data. Shown when hex, diff, or moving average is active. |
+| **Show original values** | Restores the original data, including resetting scale to 1.0 and offset to 0.0. Shown when hex, diff, moving average, scale, or offset is active. |
 | **Find prev. change** | Scrolls to the previous row where this column's value changes. |
 | **Find next change** | Scrolls to the next row where this column's value changes. |
 | **Go to max. value** | Scrolls to the row with the maximum value in this column. |
@@ -60,9 +60,21 @@ At the bottom of the menu, column statistics are displayed (non-clickable):
 | Button | Description |
 |---|---|
 | **Top / Bottom / Left / Right** | Navigate to the edges of the table |
+| **Scale** | Toggles a **Scale** row under the header, one editable cell per column (default `1.0`) |
+| **Offset** | Toggles an **Offset** row under the Scale row (default `0.0`) |
 | **Show Graph** | Opens the graph panel for the selected columns |
-| **Reset All** | Resets X-axis, hex, diff, and moving average for all columns. Shown only when any transform is active. |
+| **Reset All** | Resets X-axis, hex, diff, moving average, scale, and offset for all columns. Shown only when any transform is active. |
 | **Reload** | Reloads the file from disk, preserving current scroll position and transforms |
+
+### Scale and Offset
+
+Click **Scale** or **Offset** in the toolbar to add an editable row directly under the header
+(Scale first, then Offset). Type a value into any column's cell and press Enter: the table and
+the graph then show `value x scale + offset`, and the adjusted column is highlighted in purple.
+Values start at `1.0` / `0.0`, and hiding a row resets that factor for every column.
+
+Scale and offset stack on top of the diff / moving-average transforms and are preserved by
+**Reload**. In compare view, editing one side also updates the matched column on the other side.
 
 ### Graph View
 
@@ -112,6 +124,7 @@ When the two files have different numbers of columns, columns are matched by hea
 All transforms apply to both sides simultaneously:
 - Column selection / deselection
 - X-axis assignment
+- Scale / offset
 - Hex display
 - Numerical differences
 - Moving averages
