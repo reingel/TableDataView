@@ -382,7 +382,7 @@ function renderHeaderPanel(): void {
     li.dataset.col = String(i);
     const num = document.createElement('span');
     num.className = 'col-num';
-    num.textContent = String(i + 1);
+    num.textContent = String(i);
     const name = document.createElement('span');
     name.className = 'col-name';
     name.textContent = h;
@@ -471,7 +471,7 @@ function renderColSearchList(): void {
     if (idx === colSearchSel) li.classList.add('selected');
     const num = document.createElement('span');
     num.className = 'col-num';
-    num.textContent = String(colIdx + 1);
+    num.textContent = String(colIdx);
     const name = document.createElement('span');
     name.textContent = currentData!.headers[colIdx];
     li.appendChild(num);

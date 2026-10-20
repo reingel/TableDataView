@@ -507,7 +507,7 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   colIndexRow.appendChild(thColIndexEmpty);
   data.headers.forEach((_, colIdx) => {
     const th = document.createElement('th');
-    th.textContent = String(colIdx + 1);
+    th.textContent = String(colIdx);
     th.dataset.colIndex = String(colIdx);
     th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
     applyFixedWidth(th, colIdx);

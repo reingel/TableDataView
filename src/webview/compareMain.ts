@@ -1114,7 +1114,7 @@ function initPane(side: Side, data: ParsedFile): void {
   colIndexRow.appendChild(thEmpty);
   data.headers.forEach((_, colIdx) => {
     const th = document.createElement('th');
-    th.textContent = String(colIdx + 1);
+    th.textContent = String(colIdx);
     th.dataset.colIndex = String(colIdx);
     th.className = colIdx === 0 ? 'col-first align-right' : 'align-right';
     applyFixedWidth(th, side, colIdx);
@@ -1222,7 +1222,7 @@ function showMatchList(side: Side, colIdx: number, x: number, y: number): void {
     tag.textContent = other === 'left' ? 'L' : 'R';
     const num = document.createElement('span');
     num.className = 'col-num';
-    num.textContent = String(i + 1);
+    num.textContent = String(i);
     const name = document.createElement('span');
     name.className = 'col-name';
     name.textContent = h;
@@ -1669,7 +1669,7 @@ function renderHeaderPanel(): void {
       tag.textContent = side === 'left' ? 'L' : 'R';
       const num = document.createElement('span');
       num.className = 'col-num';
-      num.textContent = String(i + 1);
+      num.textContent = String(i);
       const name = document.createElement('span');
       name.className = 'col-name';
       name.textContent = h;
@@ -1744,7 +1744,7 @@ function renderColSearchList(): void {
     tag.textContent = m.side === 'left' ? 'L' : 'R';
     const num = document.createElement('span');
     num.className = 'col-num';
-    num.textContent = String(m.col + 1);
+    num.textContent = String(m.col);
     const name = document.createElement('span');
     name.textContent = headers?.[m.col] ?? '';
     li.appendChild(tag);
