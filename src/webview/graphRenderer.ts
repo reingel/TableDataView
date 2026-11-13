@@ -1218,6 +1218,105 @@ function redrawFFT(): void {
   updateFftYValues();
 }
 
+// ---- PNG export ----
+
+export type GraphExportOptions = {
+  width: number; height: number;   // logical (CSS) px
+  pixelRatio: number;              // output px per CSS px
+  legend: 'top' | 'right' | 'left' | 'bottom';
+  minimap: boolean;
+};
+
+export function getGraphCanvasSize(): { width: number; height: number } | null {
+  return chartInstance ? { width: chartInstance.width, height: chartInstance.height } : null;
+}
+
+// Renders the current graph (same series and visible x/y range) onto an
+// offscreen canvas in a light, print-friendly style and returns a PNG data URL.
+// Interactive overlays (crosshair, table viewport box, drag selection) are left out.
+export function exportGraphPng(opts: GraphExportOptions): string | null {
+  if (!chartInstance) return null;
+  const xs = chartInstance.scales.x, ys = chartInstance.scales.y;
+  const TEXT = '#222';
+  const GRID = 'rgba(0,0,0,0.12)';
+
+  const whiteBackgroundPlugin = {
+    id: 'exportWhiteBackground',
+    beforeDraw(chart: any) {
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, chart.width, chart.height);
+      ctx.restore();
+    },
+  };
+  // Same box as the on-screen minimap, but without touching its hit-test rect.
+  const exportMinimapPlugin = {
+    id: 'exportMinimap',
+    afterDraw(chart: any) {
+      if (zoomXMin !== null && zoomXMax !== null && currentMinimap) {
+        drawMinimapBox(chart, currentMinimap, zoomXMin, zoomXMax);
+      }
+    },
+  };
+
+  const canvas = document.createElement('canvas');
+  canvas.width = opts.width;
+  canvas.height = opts.height;
+  // Chart.js measures through the DOM, so the canvas has to be attached.
+  canvas.style.cssText = `position:fixed;left:-100000px;top:0;width:${opts.width}px;height:${opts.height}px;`;
+  document.body.appendChild(canvas);
+  let chart: any = null;
+  try {
+    chart = new Chart(canvas.getContext('2d')!, {
+      type: 'scatter',
+      data: { datasets: buildDatasets() },
+      options: {
+        responsive: false,
+        animation: false,
+        devicePixelRatio: opts.pixelRatio,
+        color: TEXT,
+        plugins: {
+          legend: {
+            display: getDataCols().length > 1 || lastRightData !== undefined,
+            position: opts.legend,
+            labels: { filter: (item: any) => item.text !== '', color: TEXT },
+          },
+          tooltip: { enabled: false },
+        },
+        scales: {
+          x: {
+            type: 'linear', min: xs.min, max: xs.max,
+            title: { display: true, text: chartInstance.options.scales.x.title.text, color: TEXT },
+            grid: { color: GRID },
+            ticks: { includeBounds: false, color: TEXT },
+          },
+          y: {
+            min: ys.min, max: ys.max,
+            title: { display: true, text: chartInstance.options.scales.y.title.text, color: TEXT },
+            grid: { color: GRID },
+            ticks: { includeBounds: false, color: TEXT },
+          },
+        },
+      },
+      plugins: [whiteBackgroundPlugin, zeroLinePlugin, ...(opts.minimap ? [exportMinimapPlugin] : [])],
+    });
+    return canvas.toDataURL('image/png');
+  } finally {
+    chart?.destroy();
+    canvas.remove();
+  }
+}
+
+// The x range currently on screen (zoom / pan included), or null when no graph
+// is drawn. isRowIndex: the graph plots against row number (1-based), not the
+// x-axis column, so min/max are row numbers.
+export function getVisibleXWindow(): { min: number; max: number; isRowIndex: boolean } | null {
+  const xs = chartInstance?.scales?.x;
+  if (!xs || !isFinite(xs.min) || !isFinite(xs.max)) return null;
+  return { min: xs.min, max: xs.max, isRowIndex: !colUsedAsX() };
+}
+
 export function resetZoom(): void {
   zoomXMin = null;
   zoomXMax = null;

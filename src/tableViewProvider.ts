@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { WebviewToExtensionMessage } from './types';
 import { streamParseAndSend } from './webviewStream';
+import { saveGraphImage } from './saveImage';
 
 const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024;
 
@@ -52,6 +53,9 @@ export class TableViewProvider {
     panel.webview.onDidReceiveMessage((msg: WebviewToExtensionMessage) => {
       if (msg.type === 'ready' || msg.type === 'reload') {
         this.loadFile(panel, uri);
+      } else if (msg.type === 'saveGraphImage') {
+        const base = path.basename(uri.fsPath, path.extname(uri.fsPath));
+        saveGraphImage(msg.dataUrl, vscode.Uri.joinPath(uri, '..', `${base}_graph.png`));
       }
     });
   }
@@ -448,6 +452,25 @@ export class TableViewProvider {
       background: var(--vscode-titleBar-activeBackground, #333);
       flex-shrink: 0;
     }
+    #graph-header { position: relative; }
+    #graph-save-popover {
+      position: absolute; right: 8px; top: 100%; z-index: 200;
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 8px 10px; min-width: 230px;
+      background: var(--vscode-menu-background, #252526);
+      color: var(--vscode-menu-foreground, inherit);
+      border: 1px solid var(--vscode-menu-border, #454545);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      font-size: 0.85em;
+    }
+    #graph-save-popover.hidden { display: none; }
+    #graph-save-popover label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    #graph-save-popover label.chk { justify-content: flex-start; }
+    #graph-save-popover select {
+      background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border); padding: 1px 4px; font-size: 1em;
+    }
+    #graph-save-popover .buttons { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
     #graph-yvalues { flex: 1; font-size: 0.8em; white-space: nowrap; overflow-x: auto; min-width: 0; }
     #graph-resize-handle {
       height: 5px;
@@ -472,15 +495,14 @@ export class TableViewProvider {
     <button id="btn-left">Left</button>
     <button id="btn-right">Right</button>
     <div class="toolbar-sep"></div>
-    <button id="btn-scale" title="Show the per-column scale row">Scale</button>
-    <button id="btn-offset" title="Show the per-column offset row">Offset</button>
-    <button id="btn-show-graph" disabled>Show Graph</button>
+    <button id="btn-scale-offset" title="Show the per-column scale and offset rows">Scale/Offset</button>
+    <button id="btn-show-graph" disabled>Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
     <div class="toolbar-sep"></div>
     <span id="file-name"></span>
     <span id="truncate-notice" class="hidden"></span>
     <button id="btn-reload" style="margin-left:auto;">&#x21bb; Reload</button>
-    <button id="btn-toggle-header" title="Show column list">&#x2630; Header</button>
+    <button id="btn-toggle-header" class="active" title="Show column list">&#x2630; Header</button>
   </div>
 
   <div id="main-row">
@@ -489,14 +511,14 @@ export class TableViewProvider {
         <thead>
           <tr id="col-index-row"></tr>
           <tr id="header-row"></tr>
-          <tr id="scale-row" class="hidden"></tr>
-          <tr id="offset-row" class="hidden"></tr>
+          <tr id="scale-row"></tr>
+          <tr id="offset-row"></tr>
         </thead>
         <tbody id="data-body"></tbody>
       </table>
     </div>
 
-    <div id="header-panel" class="hidden">
+    <div id="header-panel">
       <div id="header-panel-title">Columns</div>
       <ul id="header-panel-list" class="col-list"></ul>
     </div>
@@ -562,7 +584,29 @@ export class TableViewProvider {
           <option value="circle">o</option>
         </select>
       </label>
-      <button id="btn-close-graph">&#x2715; Close</button>
+      <button id="btn-save-graph" title="Save graph as PNG">Save</button>
+      <button id="btn-close-graph" title="Close graph">&#x2715;</button>
+      <div id="graph-save-popover" class="hidden">
+        <label>Size
+          <select id="sel-save-size">
+            <option value="current" selected>Current view</option>
+            <option value="in8x6">8 × 6 in (150 dpi)</option>
+          </select>
+        </label>
+        <label>Legend
+          <select id="sel-save-legend">
+            <option value="top" selected>Top</option>
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+            <option value="bottom">Bottom</option>
+          </select>
+        </label>
+        <label class="chk"><input type="checkbox" id="chk-save-minimap"> Show minimap</label>
+        <div class="buttons">
+          <button id="btn-save-graph-cancel">Cancel</button>
+          <button id="btn-save-graph-ok">Save…</button>
+        </div>
+      </div>
     </div>
     <div id="chart-canvas-wrapper"><canvas id="chart-canvas"></canvas></div>
     <div id="fft-divider" class="hidden"></div>

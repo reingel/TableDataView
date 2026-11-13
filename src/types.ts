@@ -28,4 +28,6 @@ export type ExtensionToWebviewMessage =
 export type WebviewToExtensionMessage =
   | { type: 'ready' }
   | { type: 'reload' }
-  | { type: 'showGraph'; columns: number[] };
+  | { type: 'showGraph'; columns: number[] }
+  | { type: 'notify'; level: 'info' | 'warning'; message: string }
+  | { type: 'saveGraphImage'; dataUrl: string };

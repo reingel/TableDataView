@@ -1,5 +1,6 @@
+import { initGraphSave } from './graphSave';
 import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, toggleScaleRow, toggleOffsetRow, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, toggleScaleOffsetRows, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, hasScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
 import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
@@ -50,11 +51,14 @@ function restoreReloadState(headers: string[]): void {
 
 function updateToolbar(): void {
   const selected = getSelected();
-  (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = selected.length === 0;
-  document.getElementById('btn-scale')!.classList.toggle('active', isScaleRowVisible());
-  document.getElementById('btn-offset')!.classList.toggle('active', isOffsetRowVisible());
+  // Graph toggles the graph pane: always usable to close it, needs a selection to open it.
+  const graphOpen = isGraphOpen();
+  const graphBtn = document.getElementById('btn-show-graph') as HTMLButtonElement;
+  graphBtn.disabled = !graphOpen && selected.length === 0;
+  graphBtn.classList.toggle('active', graphOpen);
+  document.getElementById('btn-scale-offset')!.classList.toggle('active', isScaleRowVisible() || isOffsetRowVisible());
   const hasCustomState = getXAxisCol() !== getDefaultXAxisCol() || hasDiff() || hasMovAvg() || hasHex()
-    || isScaleRowVisible() || isOffsetRowVisible();
+    || hasScaleOffset();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   updateHeaderPanelSelection();
   const graphContainer = document.getElementById('graph-container')!;
@@ -106,6 +110,38 @@ function getEffectiveRows(): string[][] {
   );
 }
 
+// The first column click in the table or Header panel opens the graph for it, so a fresh view
+// needs no separate "Show graph" step. Only once per view: after the user closes
+// the graph, further clicks just select.
+let autoGraphDone = false;
+
+function autoShowGraphOnFirstClick(e: MouseEvent): void {
+  const cell = (e.target as HTMLElement).closest('td[data-col-index], th[data-col-index]');
+  if (!cell || cell.closest('#scale-row, #offset-row')) return;
+  maybeAutoShowGraph();
+}
+
+// Called after a column click (table or Header panel) updated the selection.
+function maybeAutoShowGraph(): void {
+  if (autoGraphDone) return;
+  if (!document.getElementById('graph-container')!.classList.contains('hidden')) { autoGraphDone = true; return; }
+  // The x-axis column is always kept selected; it alone gives nothing to plot.
+  if (!getSelected().some(c => c !== getXAxisCol())) return;
+  autoGraphDone = true;
+  handleShowGraph();
+}
+
+function isGraphOpen(): boolean {
+  return !document.getElementById('graph-container')!.classList.contains('hidden');
+}
+
+function closeGraphPane(): void {
+  closeGraph();
+  setCrosshairRow(null, []);
+  document.getElementById('btn-show-fft')!.textContent = 'Show FFT';
+  updateToolbar();
+}
+
 function handleShowGraph(): void {
   if (!currentData) return;
   const selected = getSelected();
@@ -114,6 +150,7 @@ function handleShowGraph(): void {
   resetCrosshairs();
   renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol(), undefined, isXAxisOriginal());
   syncViewport();
+  document.getElementById('btn-show-graph')!.classList.add('active');
 }
 
 // The file is streamed as loadStart -> loadChunk* -> loadEnd. Accumulate rows
@@ -372,7 +409,7 @@ function gotoColumn(colIdx: number): void {
 
 // ---- Header panel (column list) ----
 
-let headerPanelOpen = false;
+let headerPanelOpen = true;
 
 function renderHeaderPanel(): void {
   const list = document.getElementById('header-panel-list')!;
@@ -446,6 +483,7 @@ function initHeaderPanel(): void {
     handleColumnClick(colIdx, e);
     updateToolbar();
     gotoColumn(colIdx);
+    maybeAutoShowGraph();
   });
   list.addEventListener('contextmenu', e => {
     const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-col]');
@@ -727,9 +765,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const c = document.getElementById('table-container')!;
     c.scrollLeft = c.scrollWidth;
   });
-  document.getElementById('btn-scale')!.addEventListener('click', () => { toggleScaleRow(); updateToolbar(); });
-  document.getElementById('btn-offset')!.addEventListener('click', () => { toggleOffsetRow(); updateToolbar(); });
-  document.getElementById('btn-show-graph')!.addEventListener('click', handleShowGraph);
+  document.getElementById('btn-scale-offset')!.addEventListener('click', () => { toggleScaleOffsetRows(); updateToolbar(); });
+  document.getElementById('btn-show-graph')!.addEventListener('click', () => {
+    if (isGraphOpen()) closeGraphPane(); else handleShowGraph();
+  });
+  // Bubble phase: runs after the cell's own click handler updated the selection.
+  document.getElementById('table-container')!.addEventListener('click', autoShowGraphOnFirstClick);
   document.getElementById('btn-reset-all')!.addEventListener('click', () => {
     resetXAxis();
     clearAllDiff();
@@ -744,11 +785,7 @@ document.addEventListener('DOMContentLoaded', () => {
     vscode.postMessage({ type: 'reload' });
   });
   document.getElementById('btn-hide-crosshair')!.addEventListener('click', hideCrosshairs);
-  document.getElementById('btn-close-graph')!.addEventListener('click', () => {
-    closeGraph();
-    setCrosshairRow(null, []);
-    document.getElementById('btn-show-fft')!.textContent = 'Show FFT';
-  });
+  document.getElementById('btn-close-graph')!.addEventListener('click', closeGraphPane);
   document.getElementById('btn-show-fft')!.addEventListener('click', () => {
     if (isFFTPaneVisible()) {
       closeFFTPane();
@@ -783,5 +820,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showColumnContextMenu(e.clientX, e.clientY, colIndex, rowIndex);
   });
 
+  initGraphSave(msg => vscode.postMessage(msg));
   vscode.postMessage({ type: 'ready' });
 });

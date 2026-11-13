@@ -1,5 +1,6 @@
+import { initGraphSave } from './graphSave';
 import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
+import { renderGraph, getVisibleXWindow, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
 import { detectDefaultXAxis, SEQ_X } from './columnSelector';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
@@ -12,7 +13,16 @@ let ROW_HEIGHT = 24;
 
 let leftData: ParsedFile | null = null;
 let rightData: ParsedFile | null = null;
+// Rows shown in each pane: the longer file's length, so every row of both files
+// is visible. The shorter pane is padded with blank rows to keep scrolling in sync.
 let displayRowCount = 0;
+// Rows present in both files — the only range where values can be compared.
+let commonRowCount = 0;
+
+function sideRowCount(side: Side): number {
+  const data = side === 'left' ? leftData : rightData;
+  return data ? data.rows.length : 0;
+}
 
 // leftColIdx → rightColIdx
 let columnMapping = new Map<number, number>();
@@ -30,8 +40,8 @@ const hexCols: Record<Side, Set<number>> = { left: new Set(), right: new Set() }
 // for both panes by the toolbar buttons; hiding a row resets it to the identity
 // so the tables never show adjusted numbers without the controls that produced
 // them being visible.
-let scaleRowVisible = false;
-let offsetRowVisible = false;
+let scaleRowVisible = true;
+let offsetRowVisible = true;
 const scales: Record<Side, number[]> = { left: [], right: [] };
 const offsets: Record<Side, number[]> = { left: [], right: [] };
 const xAxisCol: Record<Side, number> = { left: SEQ_X, right: SEQ_X };
@@ -46,7 +56,7 @@ function computeDiffColumns(): void {
   diffColumnSet.right.clear();
   if (!leftData || !rightData) return;
   for (const [li, ri] of columnMapping) {
-    for (let i = 0; i < displayRowCount; i++) {
+    for (let i = 0; i < commonRowCount; i++) {
       if (getCellValue('left', i, li) !== getCellValue('right', i, ri)) {
         diffColumnSet.left.add(li);
         diffColumnSet.right.add(ri);
@@ -250,7 +260,7 @@ function buildDiffStatsHtml(): string {
     if (ri === undefined) continue;
     let maxAbsDiff = -1;
     let maxRow = -1;
-    for (let i = 0; i < displayRowCount; i++) {
+    for (let i = 0; i < commonRowCount; i++) {
       const lv = parseFloat(getCellValue('left', i, li));
       const rv = parseFloat(getCellValue('right', i, ri));
       if (!isFinite(lv) || !isFinite(rv)) continue;
@@ -274,17 +284,20 @@ function buildDiffStatsHtml(): string {
 function updateToolbar(): void {
   const hasLeft = selectedCols.left.size > 0;
   const hasRight = selectedCols.right.size > 0;
-  (document.getElementById('btn-show-graph') as HTMLButtonElement).disabled = !hasLeft && !hasRight;
+  // Graph toggles the graph pane: always usable to close it, needs a selection to open it.
+  const graphOpen = isGraphOpen();
+  const graphBtn = document.getElementById('btn-show-graph') as HTMLButtonElement;
+  graphBtn.disabled = !graphOpen && !hasLeft && !hasRight;
+  graphBtn.classList.toggle('active', graphOpen);
 
-  document.getElementById('btn-scale')!.classList.toggle('active', scaleRowVisible);
-  document.getElementById('btn-offset')!.classList.toggle('active', offsetRowVisible);
+  document.getElementById('btn-scale-offset')!.classList.toggle('active', scaleRowVisible || offsetRowVisible);
 
   const hasCustomState =
     xAxisCol.left !== defaultXAxisCol.left || xAxisCol.right !== defaultXAxisCol.right ||
     diffCols.left.size > 0 || diffCols.right.size > 0 ||
     movAvgCols.left.size > 0 || movAvgCols.right.size > 0 ||
     hexCols.left.size > 0 || hexCols.right.size > 0 ||
-    scaleRowVisible || offsetRowVisible;
+    hasScaleOffset();
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
 
   updateHeaderPanelSelection();
@@ -335,7 +348,7 @@ function getMovAvgValue(side: Side, rowIdx: number, colIdx: number, windowSize: 
 
 function getCellValue(side: Side, rowIdx: number, colIdx: number): string {
   const data = side === 'left' ? leftData : rightData;
-  if (!data) return '';
+  if (!data || rowIdx >= data.rows.length) return '';
   let val: string;
   if (diffCols[side].has(colIdx)) val = getDiffValue(side, rowIdx, colIdx);
   else {
@@ -348,7 +361,7 @@ function getCellValue(side: Side, rowIdx: number, colIdx: number): string {
 function getEffectiveRows(side: Side): string[][] {
   const data = side === 'left' ? leftData : rightData;
   if (!data) return [];
-  return data.rows.slice(0, displayRowCount).map((row, i) =>
+  return data.rows.map((row, i) =>
     row.map((_, j) => getCellValue(side, i, j))
   );
 }
@@ -399,6 +412,17 @@ function renderBody(side: Side): void {
   for (let i = start; i <= end; i++) {
     const row = data.rows[i];
     const tr = document.createElement('tr');
+    if (!row) {
+      // This file has fewer rows than the other one: a blank filler row keeps
+      // both panes the same height so their scroll positions stay aligned.
+      const td = document.createElement('td');
+      td.colSpan = colCount + 1;
+      td.className = 'missing-row';
+      td.style.height = `${ROW_HEIGHT}px`;
+      tr.appendChild(td);
+      frag.appendChild(tr);
+      continue;
+    }
     tr.dataset.rowIndex = String(i);
     tr.addEventListener('click', () => navigateToRow(i));
 
@@ -432,7 +456,7 @@ function renderBody(side: Side): void {
         extraCls += ' hex-col';
       }
       const otherCol = side === 'left' ? columnMapping.get(j) : reverseMapping.get(j);
-      if (otherCol !== undefined) {
+      if (otherCol !== undefined && i < commonRowCount) {
         const otherVal = getCellValue(otherSide(side), i, otherCol);
         if (displayVal !== otherVal) extraCls += ' value-diff';
       }
@@ -580,7 +604,7 @@ function clearHex(side: Side, colIdx: number): void {
   updateToolbar();
 }
 
-// ---- Scale / offset (synced between sides) ----
+// ---- Scale / offset (independent per side; row visibility is shared) ----
 
 type SOKind = 'scale' | 'offset';
 
@@ -645,18 +669,14 @@ function refreshAllSO(): void {
   }
 }
 
-// Writes one side's value and mirrors it onto the matched column opposite, the
-// same way diff / moving average / x-axis changes are mirrored.
+// Writes one side's value only. Unlike diff / moving average / x-axis, scale and
+// offset are per file (e.g. converting units of just one of them), so they are
+// not mirrored onto the matched column opposite.
 function setSOValue(kind: SOKind, side: Side, col: number, v: number): void {
-  const write = (sd: Side, c: number) => {
-    soArr(kind, sd)[c] = v;
-    const input = soInput(kind, sd, c);
-    if (input) input.value = fmtSO(v);
-    refreshSOCol(sd, c);
-  };
-  write(side, col);
-  const mi = getMappedCol(side, col);
-  if (mi !== undefined) write(otherSide(side), mi);
+  soArr(kind, side)[col] = v;
+  const input = soInput(kind, side, col);
+  if (input) input.value = fmtSO(v);
+  refreshSOCol(side, col);
 }
 
 function commitSO(kind: SOKind, side: Side, col: number, input: HTMLInputElement): void {
@@ -756,9 +776,20 @@ function resetScaleOffset(side: Side, col: number): void {
   setSOValue('offset', side, col, 0);
 }
 
+// Back to the default: both rows shown, every column at 1.0 / 0.0.
 function clearAllScaleOffset(): void {
-  setSORowVisible('scale', false);
-  setSORowVisible('offset', false);
+  setSORowVisible('scale', true);
+  setSORowVisible('offset', true);
+  resetSOValues('scale');
+  resetSOValues('offset');
+  refreshAllSO();
+  scheduleRender();
+}
+
+// True when any column on either side has a non-identity scale or offset in effect.
+function hasScaleOffset(): boolean {
+  return (['left', 'right'] as Side[]).some(side =>
+    scales[side].some((_, c) => getScale(side, c) !== 1) || offsets[side].some((_, c) => getOffset(side, c) !== 0));
 }
 
 function applyRowHighlight(side: Side): void {
@@ -872,7 +903,7 @@ function gotoNextDiff(side: Side, colIdx: number): void {
   const start = (crosshairRowIdx !== null ? crosshairRowIdx + 1 : 0);
   for (let pass = 0; pass < 2; pass++) {
     const from = pass === 0 ? start : 0;
-    const to = pass === 0 ? displayRowCount : (crosshairRowIdx ?? 0);
+    const to = pass === 0 ? commonRowCount : Math.min(crosshairRowIdx ?? 0, commonRowCount);
     for (let i = from; i < to; i++) {
       if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
         navigateToRow(i);
@@ -885,10 +916,10 @@ function gotoNextDiff(side: Side, colIdx: number): void {
 function gotoPrevDiff(side: Side, colIdx: number): void {
   const otherCol = getMappedCol(side, colIdx);
   if (otherCol === undefined) return;
-  const start = (crosshairRowIdx !== null ? crosshairRowIdx - 1 : displayRowCount - 1);
+  const start = Math.min(crosshairRowIdx !== null ? crosshairRowIdx - 1 : commonRowCount - 1, commonRowCount - 1);
   for (let pass = 0; pass < 2; pass++) {
-    const from = pass === 0 ? start : displayRowCount - 1;
-    const to = pass === 0 ? -1 : (crosshairRowIdx ?? displayRowCount);
+    const from = pass === 0 ? start : commonRowCount - 1;
+    const to = pass === 0 ? -1 : (crosshairRowIdx ?? commonRowCount);
     for (let i = from; i > to; i--) {
       if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
         navigateToRow(i);
@@ -903,7 +934,7 @@ function gotoMaxDiff(side: Side, colIdx: number): void {
   if (otherCol === undefined) return;
   let maxDiff = -1;
   let maxRow = -1;
-  for (let i = 0; i < displayRowCount; i++) {
+  for (let i = 0; i < commonRowCount; i++) {
     const lv = parseFloat(getCellValue(side, i, colIdx));
     const rv = parseFloat(getCellValue(otherSide(side), i, otherCol));
     if (!isFinite(lv) || !isFinite(rv)) continue;
@@ -915,7 +946,7 @@ function gotoMaxDiff(side: Side, colIdx: number): void {
 }
 
 function gotoNaN(side: Side, colIdx: number, dir: 1 | -1): void {
-  const n = displayRowCount;
+  const n = sideRowCount(side);
   if (n === 0) return;
   // Wrap around so repeated invocations walk through every gap in the column.
   const start = crosshairRowIdx !== null
@@ -1196,6 +1227,178 @@ function scrollToRow(rowIdx: number): void {
   scheduleRender();
 }
 
+// ---- Time sync (cross-correlation) ----
+
+// Sync needs a real time column as x-axis on both sides (an offset on the row
+// sequence means nothing) and that column must not be value-transformed.
+function canSyncTime(side: Side, colIdx: number): boolean {
+  const other = otherSide(side);
+  const otherCol = getMappedCol(side, colIdx);
+  return otherCol !== undefined &&
+    xAxisCol[side] >= 0 && xAxisCol[other] >= 0 &&
+    colIdx !== xAxisCol[side] && otherCol !== xAxisCol[other] &&
+    isXAxisOriginal(side) && isXAxisOriginal(other);
+}
+
+// (time, value) pairs of a column in effective units (scale/offset and value
+// transforms applied), sorted by time for interpolation.
+function timeSeries(side: Side, colIdx: number): { t: number[]; v: number[] } {
+  const pts: Array<[number, number]> = [];
+  for (let i = 0; i < sideRowCount(side); i++) {
+    const t = parseFloat(getCellValue(side, i, xAxisCol[side]));
+    const v = parseFloat(getCellValue(side, i, colIdx));
+    if (isFinite(t) && isFinite(v)) pts.push([t, v]);
+  }
+  pts.sort((a, b) => a[0] - b[0]);
+  return { t: pts.map(p => p[0]), v: pts.map(p => p[1]) };
+}
+
+// Linear interpolation of the series at uniformly spaced times start + k*step;
+// NaN outside the series' time range.
+function resampleUniform(s: { t: number[]; v: number[] }, start: number, step: number, count: number): Float64Array {
+  const out = new Float64Array(count);
+  let j = 0;
+  for (let k = 0; k < count; k++) {
+    const x = start + k * step;
+    if (s.t.length === 0 || x < s.t[0] || x > s.t[s.t.length - 1]) { out[k] = NaN; continue; }
+    while (j < s.t.length - 2 && s.t[j + 1] < x) j++;
+    const t0 = s.t[j], t1 = s.t[j + 1] ?? t0;
+    const f = t1 > t0 ? (x - t0) / (t1 - t0) : 0;
+    out[k] = s.v[j] + f * ((s.v[j + 1] ?? s.v[j]) - s.v[j]);
+  }
+  return out;
+}
+
+const SYNC_GRID = 1000;
+
+// Lag search over m in [-N, N] grid steps: the reference r[j] is compared with
+// ext[j - m + N]. Pearson correlation ranks the lags; lags within SYNC_CORR_TIE
+// of the best are treated as ties and decided by the smallest mean squared
+// difference, because a trend (ramp) correlates ~1 at every lag and only the
+// level difference pins down the true shift. Returns the lag in (fractional)
+// grid steps, or null when no lag has enough overlap and variation.
+const SYNC_CORR_TIE = 1e-4;
+function findBestLag(r: Float64Array, ext: Float64Array, N: number): { lag: number; corr: number } | null {
+  const minOverlap = Math.floor(N / 4);
+  const corr = new Float64Array(2 * N + 1).fill(NaN);
+  const mse = new Float64Array(2 * N + 1).fill(NaN);
+  for (let m = -N; m <= N; m++) {
+    // Two-pass (centered) sums: values like latitude (37.00001...) lose all
+    // precision in the one-pass sum-of-squares formula.
+    let n = 0, sx = 0, sy = 0;
+    for (let j = 0; j < N; j++) {
+      const x = r[j], y = ext[j - m + N];
+      if (!isFinite(x) || !isFinite(y)) continue;
+      n++; sx += x; sy += y;
+    }
+    if (n < minOverlap) continue;
+    const mx = sx / n, my = sy / n;
+    let vx = 0, vy = 0, cxy = 0, d2 = 0;
+    for (let j = 0; j < N; j++) {
+      const x = r[j], y = ext[j - m + N];
+      if (!isFinite(x) || !isFinite(y)) continue;
+      const dx = x - mx, dy = y - my;
+      vx += dx * dx; vy += dy * dy; cxy += dx * dy;
+      d2 += (x - y) * (x - y);
+    }
+    // A flat stretch (no variation) carries no timing information.
+    const tiny = 1e-24 * n * Math.max(1, mx * mx, my * my);
+    if (vx <= tiny || vy <= tiny) continue;
+    corr[m + N] = Math.max(-1, Math.min(1, cxy / Math.sqrt(vx * vy)));
+    mse[m + N] = d2 / n;
+  }
+
+  let bestC = -Infinity;
+  for (const c of corr) if (c > bestC) bestC = c;
+  if (bestC === -Infinity) return null;
+  let best = 0, bestE = Infinity;
+  for (let m = -N; m <= N; m++) {
+    const c = corr[m + N];
+    if (!(c >= bestC - SYNC_CORR_TIE)) continue;
+    const e = mse[m + N];
+    if (e < bestE || (e === bestE && Math.abs(m) < Math.abs(best))) { bestE = e; best = m; }
+  }
+
+  // Parabolic refinement between neighbouring lags for sub-step accuracy, on
+  // whichever measure is curved there (correlation is flat along a trend).
+  const k = best + N;
+  let frac = 0;
+  const parabola = (a: number, b: number, c: number) => {
+    const den = a - 2 * b + c;
+    return den !== 0 ? Math.max(-0.5, Math.min(0.5, 0.5 * (a - c) / den)) : 0;
+  };
+  if (k > 0 && k < 2 * N) {
+    const c0 = corr[k - 1], c1 = corr[k], c2 = corr[k + 1];
+    const e0 = mse[k - 1], e1 = mse[k], e2 = mse[k + 1];
+    if (isFinite(c0) && isFinite(c2) && c0 - 2 * c1 + c2 < -1e-9) frac = parabola(c0, c1, c2);
+    else if (isFinite(e0) && isFinite(e2) && e0 - 2 * e1 + e2 > 0) frac = parabola(e0, e1, e2);
+  }
+  return { lag: best + frac, corr: corr[k] };
+}
+
+// Shifts `side`'s time (offset of its x-axis column) so that colIdx lines up
+// with its matched column on the other side. The reference is the other side's
+// data inside the graph's visible x window; the lag with the highest Pearson
+// correlation, searched over +-one window width, wins.
+function syncTimeOffset(side: Side, colIdx: number): void {
+  if (!canSyncTime(side, colIdx)) return;
+  const notify = (level: 'info' | 'warning', message: string) =>
+    vscode.postMessage({ type: 'notify', level, message });
+  const other = otherSide(side);
+  const ref = timeSeries(other, getMappedCol(side, colIdx)!);
+  const mov = timeSeries(side, colIdx);
+  if (ref.t.length < 3 || mov.t.length < 3) { notify('warning', 'Not enough numeric data to sync.'); return; }
+
+  // Visible window in time units. A graph plotted against row number is
+  // converted through the reference side's time column.
+  let a = ref.t[0], b = ref.t[ref.t.length - 1];
+  const graphOpen = !document.getElementById('graph-container')!.classList.contains('hidden');
+  const win = graphOpen ? getVisibleXWindow() : null;
+  if (win) {
+    if (win.isRowIndex) {
+      const n = sideRowCount(other);
+      const rowTime = (r: number) => parseFloat(getCellValue(other, Math.max(0, Math.min(n - 1, Math.round(r) - 1)), xAxisCol[other]));
+      const ta = rowTime(win.min), tb = rowTime(win.max);
+      if (isFinite(ta) && isFinite(tb)) { a = Math.min(ta, tb); b = Math.max(ta, tb); }
+    } else {
+      a = win.min; b = win.max;
+    }
+  }
+  a = Math.max(a, ref.t[0]);
+  b = Math.min(b, ref.t[ref.t.length - 1]);
+  if (!(b > a)) { notify('warning', 'The visible graph range has no reference data to sync with.'); return; }
+
+  const N = SYNC_GRID;
+  const dt = (b - a) / (N - 1);
+  const r = resampleUniform(ref, a, dt, N);
+  // Moving signal on an extended grid covering every tested lag:
+  // s_lag(g_j) = mov(a + (j - m)*dt) = ext[j - m + N] for m in [-N, N].
+  const ext = resampleUniform(mov, a - N * dt, dt, 3 * N);
+  const found = findBestLag(r, ext, N);
+  if (!found) { notify('warning', 'No variation to align in the visible range (flat data). Zoom out or pick another range.'); return; }
+  const lag = found.lag * dt;
+  const bestC = found.corr;
+
+  const xCol = xAxisCol[side];
+  const newOffset = parseFloat((getOffset(side, xCol) + lag).toPrecision(12));
+  setSORowVisible('scale', true);
+  setSORowVisible('offset', true);
+  setSOValue('offset', side, xCol, newOffset);
+  scheduleRender();
+  updateToolbar();
+  const name = (side === 'left' ? leftData : rightData)!.headers[xCol];
+  notify('info', `${side === 'left' ? 'Left' : 'Right'} ${name} offset ${newOffset} (shift ${formatScaled(lag)}, correlation ${bestC.toFixed(3)})`);
+}
+
+// Undo a sync: this side's time (x-axis column) offset back to 0.0.
+function resetTimeOffset(side: Side): void {
+  const xCol = xAxisCol[side];
+  if (xCol < 0) return;
+  setSOValue('offset', side, xCol, 0);
+  scheduleRender();
+  updateToolbar();
+}
+
 // ---- Context menu ----
 
 let ctxSide: Side = 'left';
@@ -1301,6 +1504,14 @@ function initContextMenu(): void {
     menuEl.classList.add('hidden');
     if (ctxColIdx >= 0) clearManualMatch(ctxSide, ctxColIdx);
   });
+  document.getElementById('ctx-sync')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    if (ctxColIdx >= 0) syncTimeOffset(ctxSide, ctxColIdx);
+  });
+  document.getElementById('ctx-reset-sync')!.addEventListener('click', () => {
+    menuEl.classList.add('hidden');
+    resetTimeOffset(ctxSide);
+  });
   matchListEl.addEventListener('click', e => {
     const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-col]');
     if (!li || !matchListCtx) return;
@@ -1353,6 +1564,16 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-match-sep', colIndex >= 0);
   setItemVisible('ctx-match-with', colIndex >= 0);
   setItemVisible('ctx-clear-match', hasMappedCol);
+  const canSync = hasMappedCol && canSyncTime(side, colIndex);
+  // Reset sync is also offered on the time (x-axis) column itself, where
+  // syncing makes no sense but undoing a previous sync does.
+  const canResetSync = (canSync || isXAxis) && xAxisCol[side] >= 0 && getOffset(side, xAxisCol[side]) !== 0;
+  setItemVisible('ctx-sync-sep', canSync || canResetSync);
+  setItemVisible('ctx-sync', canSync);
+  setItemVisible('ctx-reset-sync', canResetSync);
+  setItemVisible('ctx-sync-sep2', canSync || canResetSync);
+  document.getElementById('ctx-sync')!.textContent =
+    side === 'left' ? 'Sync with right data' : 'Sync with left data';
 
   const hasStats = colIndex >= 0;
   // Turned on below if the column has NaNs.
@@ -1362,7 +1583,7 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-stats', hasStats);
   if (hasStats) {
     let maxV = -Infinity, minV = Infinity, sum = 0, count = 0, nanCount = 0;
-    for (let i = 0; i < displayRowCount; i++) {
+    for (let i = 0; i < sideRowCount(side); i++) {
       const v = parseFloat(getCellValue(side, i, colIndex));
       if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
       else nanCount++;
@@ -1473,7 +1694,7 @@ function updateFileLabels(): void {
 
   if (leftData.truncated || rightData.truncated || leftData.rows.length !== rightData.rows.length) {
     document.getElementById('truncate-notice')!.textContent =
-      `Comparing ${displayRowCount.toLocaleString()} rows (of ${leftData.rows.length.toLocaleString()} / ${rightData.rows.length.toLocaleString()})`;
+      `Rows ${leftData.rows.length.toLocaleString()} / ${rightData.rows.length.toLocaleString()} (values compared over first ${commonRowCount.toLocaleString()})`;
     document.getElementById('truncate-notice')!.classList.remove('hidden');
   } else {
     document.getElementById('truncate-notice')!.classList.add('hidden');
@@ -1518,7 +1739,8 @@ function commitCompareData(left: ParsedFile, right: ParsedFile): void {
   {
     leftData = left;
     rightData = right;
-    displayRowCount = Math.min(leftData.rows.length, rightData.rows.length);
+    displayRowCount = Math.max(leftData.rows.length, rightData.rows.length);
+    commonRowCount = Math.min(leftData.rows.length, rightData.rows.length);
     buildColumnMapping(leftData.headers, rightData.headers);
     applyMatchOverrides();
 
@@ -1650,9 +1872,58 @@ function gotoCompareColumn(side: Side, col: number): void {
   if (otherCol !== undefined) flashColumn(other, otherCol);
 }
 
+// ---- Graph open ----
+
+function isGraphOpen(): boolean {
+  return !document.getElementById('graph-container')!.classList.contains('hidden');
+}
+
+function closeGraphPane(): void {
+  closeGraph();
+  (document.getElementById('sel-graph-mode') as HTMLSelectElement).value = 'original';
+  crosshairRowIdx = null;
+  applyRowHighlight('left');
+  applyRowHighlight('right');
+  updateToolbar();
+}
+
+function showGraph(): void {
+  if (!leftData || !rightData) return;
+  resetZoom();
+  resetCrosshairs();
+  renderGraph(
+    leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
+    { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
+    isXAxisOriginal('left')
+  );
+  syncViewport();
+  document.getElementById('btn-show-graph')!.classList.add('active');
+}
+
+// The first column click in the table or Header panel opens the graph for it, so a fresh view
+// needs no separate "Show graph" step. Only once per view: after the user closes
+// the graph, further clicks just select.
+let autoGraphDone = false;
+
+function autoShowGraphOnFirstClick(e: MouseEvent): void {
+  const cell = (e.target as HTMLElement).closest('td[data-col-index], th[data-col-index]');
+  if (!cell || cell.closest('.scale-row, .offset-row')) return;
+  maybeAutoShowGraph();
+}
+
+// Called after a column click (table or Header panel) updated the selection.
+function maybeAutoShowGraph(): void {
+  if (autoGraphDone) return;
+  if (!document.getElementById('graph-container')!.classList.contains('hidden')) { autoGraphDone = true; return; }
+  const dataSelected = (side: Side) => Array.from(selectedCols[side]).some(c => c !== xAxisCol[side]);
+  if (!dataSelected('left') && !dataSelected('right')) return;
+  autoGraphDone = true;
+  showGraph();
+}
+
 // ---- Header panel (column list) ----
 
-let headerPanelOpen = false;
+let headerPanelOpen = true;
 
 function renderHeaderPanel(): void {
   const list = document.getElementById('header-panel-list')!;
@@ -1672,7 +1943,12 @@ function renderHeaderPanel(): void {
       num.textContent = String(i);
       const name = document.createElement('span');
       name.className = 'col-name';
-      name.textContent = h;
+      // A left column matched to a differently named right column (fuzzy or
+      // manual match) shows both names so the pairing is visible.
+      const ri = side === 'left' ? columnMapping.get(i) : undefined;
+      const rightName = ri !== undefined ? rightData?.headers[ri] : undefined;
+      name.textContent = rightName !== undefined && rightName !== h ? `${h} \u2194 ${rightName}` : h;
+      name.title = name.textContent;
       li.appendChild(tag);
       li.appendChild(num);
       li.appendChild(name);
@@ -1715,6 +1991,7 @@ function initHeaderPanel(): void {
     const colIdx = parseInt(li.dataset.col!, 10);
     handleColumnClick(side, colIdx, e);
     gotoCompareColumn(side, colIdx);
+    maybeAutoShowGraph();
   });
   list.addEventListener('contextmenu', e => {
     const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-side]');
@@ -2029,19 +2306,18 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-show-graph')!.addEventListener('click', () => {
-    if (!leftData || !rightData) return;
-    resetZoom();
-    resetCrosshairs();
-    renderGraph(
-      leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
-      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
-      isXAxisOriginal('left')
-    );
-    syncViewport();
+    if (isGraphOpen()) closeGraphPane(); else showGraph();
   });
+  // Bubble phase: runs after the cell's own click handler updated the selection.
+  document.getElementById('left-pane')!.addEventListener('click', autoShowGraphOnFirstClick);
+  document.getElementById('right-pane')!.addEventListener('click', autoShowGraphOnFirstClick);
 
-  document.getElementById('btn-scale')!.addEventListener('click', () => { setSORowVisible('scale', !scaleRowVisible); updateToolbar(); });
-  document.getElementById('btn-offset')!.addEventListener('click', () => { setSORowVisible('offset', !offsetRowVisible); updateToolbar(); });
+  document.getElementById('btn-scale-offset')!.addEventListener('click', () => {
+    const visible = !(scaleRowVisible && offsetRowVisible);
+    setSORowVisible('scale', visible);
+    setSORowVisible('offset', visible);
+    updateToolbar();
+  });
   document.getElementById('btn-reset-all')!.addEventListener('click', resetAll);
   document.getElementById('btn-swap')!.addEventListener('click', swapSides);
   document.getElementById('btn-reload')!.addEventListener('click', () => {
@@ -2057,13 +2333,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setGraphDiffMode(mode);
   });
 
-  document.getElementById('btn-close-graph')!.addEventListener('click', () => {
-    closeGraph();
-    (document.getElementById('sel-graph-mode') as HTMLSelectElement).value = 'original';
-    crosshairRowIdx = null;
-    applyRowHighlight('left');
-    applyRowHighlight('right');
-  });
+  document.getElementById('btn-close-graph')!.addEventListener('click', closeGraphPane);
 
   document.getElementById('sel-line-width')!.addEventListener('change', e => {
     setLineWidth(parseFloat((e.target as HTMLSelectElement).value));
@@ -2072,5 +2342,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setMarkerStyle((e.target as HTMLSelectElement).value);
   });
 
+  initGraphSave(msg => vscode.postMessage(msg));
   vscode.postMessage({ type: 'ready' });
 });

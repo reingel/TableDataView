@@ -21,8 +21,9 @@ const hexCols = new Set<number>();
 // corresponding toolbar row is shown; hiding a row resets it to the identity so
 // the table never displays adjusted numbers without the controls that produced
 // them being visible.
-let scaleRowVisible = false;
-let offsetRowVisible = false;
+// Shown by default; the toolbar toggle hides them (and resets the values).
+let scaleRowVisible = true;
+let offsetRowVisible = true;
 let scales: number[] = [];
 let offsets: number[] = [];
 let onChangeCallback: (() => void) | null = null;
@@ -246,7 +247,7 @@ function commitSO(kind: SOKind, col: number, input: HTMLInputElement): void {
 function buildSORow(kind: SOKind, label: string, data: ParsedFile): void {
   const tr = document.getElementById(`${kind}-row`)!;
   tr.innerHTML = '';
-  tr.classList.add('hidden');
+  tr.classList.toggle('hidden', !(kind === 'scale' ? scaleRowVisible : offsetRowVisible));
 
   const thLabel = document.createElement('th');
   thLabel.textContent = label;
@@ -319,12 +320,12 @@ function setSORowVisible(kind: SOKind, visible: boolean): void {
   scheduleRender();
 }
 
-export function toggleScaleRow(): void {
-  setSORowVisible('scale', !scaleRowVisible);
-}
-
-export function toggleOffsetRow(): void {
-  setSORowVisible('offset', !offsetRowVisible);
+// One toolbar button drives both rows. If only one happens to be visible
+// (e.g. restored state), the click brings up the missing one first.
+export function toggleScaleOffsetRows(): void {
+  const visible = !(scaleRowVisible && offsetRowVisible);
+  setSORowVisible('scale', visible);
+  setSORowVisible('offset', visible);
 }
 
 // "Show original values" on a single column: back to scale 1.0 / offset 0.0.
@@ -339,9 +340,19 @@ export function resetScaleOffset(col: number): void {
   scheduleRender();
 }
 
+// Back to the default: both rows shown, every column at 1.0 / 0.0.
 export function clearAllScaleOffset(): void {
-  setSORowVisible('scale', false);
-  setSORowVisible('offset', false);
+  setSORowVisible('scale', true);
+  setSORowVisible('offset', true);
+  resetSOValues('scale');
+  resetSOValues('offset');
+  refreshAllSO();
+  scheduleRender();
+}
+
+// True when any column has a non-identity scale or offset in effect.
+export function hasScaleOffset(): boolean {
+  return scales.some((_, c) => getScale(c) !== 1) || offsets.some((_, c) => getOffset(c) !== 0);
 }
 
 export function getScaleOffsetSnapshot(): ScaleOffsetState {
@@ -486,8 +497,8 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   diffCols.clear();
   movAvgCols.clear();
   hexCols.clear();
-  scaleRowVisible = false;
-  offsetRowVisible = false;
+  scaleRowVisible = true;
+  offsetRowVisible = true;
   scales = new Array(data.headers.length).fill(1);
   offsets = new Array(data.headers.length).fill(0);
   onChangeCallback = onSelectionChange;
