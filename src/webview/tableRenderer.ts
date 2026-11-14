@@ -1,10 +1,11 @@
-import { ParsedFile } from '../types';
+import { TableFile } from './tableData';
 import { init as initSelector, handleColumnClick, applyHighlight, getSelected, detectDefaultXAxis } from './columnSelector';
+import { visibleColumns, spacerCell } from './columnWindow';
 
-const BUFFER = 40;
+const BUFFER = 15;
 let ROW_HEIGHT = 24;
 
-let currentData: ParsedFile | null = null;
+let currentData: TableFile | null = null;
 let crosshairRowIdx: number | null = null;
 let crosshairColIdxs: number[] = [];
 let renderPending = false;
@@ -21,13 +22,14 @@ const hexCols = new Set<number>();
 // corresponding toolbar row is shown; hiding a row resets it to the identity so
 // the table never displays adjusted numbers without the controls that produced
 // them being visible.
-let scaleRowVisible = false;
-let offsetRowVisible = false;
+// Shown by default; the toolbar toggle hides them (and resets the values).
+let scaleRowVisible = true;
+let offsetRowVisible = true;
 let scales: number[] = [];
 let offsets: number[] = [];
 let onChangeCallback: (() => void) | null = null;
 
-export function getData(): ParsedFile | null {
+export function getData(): TableFile | null {
   return currentData;
 }
 
@@ -243,10 +245,10 @@ function commitSO(kind: SOKind, col: number, input: HTMLInputElement): void {
   onChangeCallback?.();
 }
 
-function buildSORow(kind: SOKind, label: string, data: ParsedFile): void {
+function buildSORow(kind: SOKind, label: string, data: TableFile): void {
   const tr = document.getElementById(`${kind}-row`)!;
   tr.innerHTML = '';
-  tr.classList.add('hidden');
+  tr.classList.toggle('hidden', !(kind === 'scale' ? scaleRowVisible : offsetRowVisible));
 
   const thLabel = document.createElement('th');
   thLabel.textContent = label;
@@ -319,12 +321,12 @@ function setSORowVisible(kind: SOKind, visible: boolean): void {
   scheduleRender();
 }
 
-export function toggleScaleRow(): void {
-  setSORowVisible('scale', !scaleRowVisible);
-}
-
-export function toggleOffsetRow(): void {
-  setSORowVisible('offset', !offsetRowVisible);
+// One toolbar button drives both rows. If only one happens to be visible
+// (e.g. restored state), the click brings up the missing one first.
+export function toggleScaleOffsetRows(): void {
+  const visible = !(scaleRowVisible && offsetRowVisible);
+  setSORowVisible('scale', visible);
+  setSORowVisible('offset', visible);
 }
 
 // "Show original values" on a single column: back to scale 1.0 / offset 0.0.
@@ -339,9 +341,19 @@ export function resetScaleOffset(col: number): void {
   scheduleRender();
 }
 
+// Back to the default: both rows shown, every column at 1.0 / 0.0.
 export function clearAllScaleOffset(): void {
-  setSORowVisible('scale', false);
-  setSORowVisible('offset', false);
+  setSORowVisible('scale', true);
+  setSORowVisible('offset', true);
+  resetSOValues('scale');
+  resetSOValues('offset');
+  refreshAllSO();
+  scheduleRender();
+}
+
+// True when any column has a non-identity scale or offset in effect.
+export function hasScaleOffset(): boolean {
+  return scales.some((_, c) => getScale(c) !== 1) || offsets.some((_, c) => getOffset(c) !== 0);
 }
 
 export function getScaleOffsetSnapshot(): ScaleOffsetState {
@@ -418,7 +430,7 @@ function measureTextWidth(text: string, font: string): number {
 // Compute a fixed pixel width per column from the header and a sample of values,
 // measured with the table's actual font. Locking widths keeps columns from
 // jittering as the virtual scroller renders different rows.
-function computeColumnWidths(data: ParsedFile): number[] {
+function computeColumnWidths(data: TableFile): number[] {
   const cs = getComputedStyle(document.body);
   const normalFont = `${cs.fontSize} ${cs.fontFamily}`;
   const boldFont = `bold ${cs.fontSize} ${cs.fontFamily}`;
@@ -439,7 +451,7 @@ function computeColumnWidths(data: ParsedFile): number[] {
     const headerW = Math.ceil(Math.max(headerWBold, headerWNormal)) + COL_PAD;
     let dataMax = 0;
     for (const i of sampleIdx) {
-      const v = data.rows[i]?.[col];
+      const v = data.rows.row(i)?.[col];
       if (v) { const w = measureTextWidth(v, normalFont); if (w > dataMax) dataMax = w; }
     }
     const dataW = Math.min(COL_MAX_W, Math.ceil(dataMax) + COL_PAD);
@@ -456,7 +468,7 @@ function applyFixedWidth(el: HTMLElement, colIdx: number): void {
   el.style.width = el.style.minWidth = el.style.maxWidth = `${w}px`;
 }
 
-function fixStickyWidths(data: ParsedFile): void {
+function fixStickyWidths(data: TableFile): void {
   const PX_PER_CHAR = 9;
   const PADDING = 24;
 
@@ -468,26 +480,26 @@ function fixStickyWidths(data: ParsedFile): void {
   const s = Math.min(100, n);
   let maxLen = data.headers[0]?.length ?? 0;
   for (let i = 0; i < s; i++) {
-    const v = data.rows[i]?.[0];
+    const v = data.rows.row(i)?.[0];
     if (v && v.length > maxLen) maxLen = v.length;
   }
   for (let i = Math.max(s, n - 100); i < n; i++) {
-    const v = data.rows[i]?.[0];
+    const v = data.rows.row(i)?.[0];
     if (v && v.length > maxLen) maxLen = v.length;
   }
   const colFirstPx = Math.max(maxLen * PX_PER_CHAR + PADDING, 50);
   document.documentElement.style.setProperty('--col-first-width', `${colFirstPx}px`);
 }
 
-export function render(data: ParsedFile, onSelectionChange: () => void): void {
+export function render(data: TableFile, onSelectionChange: () => void): void {
   currentData = data;
   crosshairRowIdx = null;
   crosshairColIdxs = [];
   diffCols.clear();
   movAvgCols.clear();
   hexCols.clear();
-  scaleRowVisible = false;
-  offsetRowVisible = false;
+  scaleRowVisible = true;
+  offsetRowVisible = true;
   scales = new Array(data.headers.length).fill(1);
   offsets = new Array(data.headers.length).fill(0);
   onChangeCallback = onSelectionChange;
@@ -540,6 +552,10 @@ export function render(data: ParsedFile, onSelectionChange: () => void): void {
   container.addEventListener('scroll', onScroll, { passive: true });
   container.scrollTop = 0;
 
+  const tbody = document.getElementById('data-body')!;
+  tbody.removeEventListener('click', onBodyClick);
+  tbody.addEventListener('click', onBodyClick);
+
   renderBody();
 
   requestAnimationFrame(() => {
@@ -560,6 +576,16 @@ function onScroll(): void {
   scheduleRender();
 }
 
+// One delegated listener for the whole body instead of two per cell: cell
+// (column) first, then row, the order the per-element listeners fired in.
+function onBodyClick(e: MouseEvent): void {
+  const target = e.target as HTMLElement;
+  const td = target.closest<HTMLElement>('td[data-col-index]');
+  if (td) handleColumnClick(parseInt(td.dataset.colIndex!, 10), e);
+  const tr = target.closest<HTMLElement>('tr[data-row-index]');
+  if (tr && rowClickCallback) rowClickCallback(parseInt(tr.dataset.rowIndex!, 10));
+}
+
 function scheduleRender(): void {
   if (!renderPending) {
     renderPending = true;
@@ -572,12 +598,14 @@ function scheduleRender(): void {
 
 export function getDiffValue(rowIdx: number, colIdx: number): string {
   if (!currentData) return '';
-  const n = currentData.rows.length;
-  if (n < 2) return currentData.rows[rowIdx][colIdx];
+  const rows = currentData.rows;
+  const n = rows.length;
+  if (n < 2) return rows.cell(rowIdx, colIdx);
   const i = rowIdx < n - 1 ? rowIdx : n - 2;
-  const curr = parseFloat(currentData.rows[i + 1][colIdx]);
-  const prev = parseFloat(currentData.rows[i][colIdx]);
-  if (isNaN(curr) || isNaN(prev)) return currentData.rows[rowIdx][colIdx];
+  const vals = rows.column(colIdx);
+  const curr = vals[i + 1];
+  const prev = vals[i];
+  if (isNaN(curr) || isNaN(prev)) return rows.cell(rowIdx, colIdx);
   return String(curr - prev);
 }
 
@@ -585,11 +613,12 @@ export function getMovAvgValue(rowIdx: number, colIdx: number, windowSize: numbe
   if (!currentData) return '';
   const start = Math.max(0, rowIdx - windowSize + 1);
   let sum = 0, count = 0;
+  const vals = currentData.rows.column(colIdx);
   for (let i = start; i <= rowIdx; i++) {
-    const val = parseFloat(currentData.rows[i][colIdx]);
+    const val = vals[i];
     if (!isNaN(val)) { sum += val; count++; }
   }
-  return count > 0 ? String(sum / count) : currentData.rows[rowIdx][colIdx];
+  return count > 0 ? String(sum / count) : currentData.rows.cell(rowIdx, colIdx);
 }
 
 function renderBody(): void {
@@ -602,6 +631,10 @@ function renderBody(): void {
 
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
   const end = Math.min(totalRows - 1, Math.ceil((scrollTop + clientHeight) / ROW_HEIGHT) + BUFFER);
+
+  // Read layout before the body is torn down below.
+  const firstTh = document.querySelector<HTMLElement>('#header-row th[data-col-index="1"]');
+  const [c0, c1] = visibleColumns(container, firstTh, colWidths, colCount);
 
   const tbody = document.getElementById('data-body')!;
   tbody.innerHTML = '';
@@ -617,17 +650,16 @@ function renderBody(): void {
 
   const frag = document.createDocumentFragment();
   for (let i = start; i <= end; i++) {
-    const row = currentData.rows[i];
+    const row = currentData.rows.row(i)!;
     const tr = document.createElement('tr');
     tr.dataset.rowIndex = String(i);
-    tr.addEventListener('click', () => { if (rowClickCallback) rowClickCallback(i); });
 
     const tdNum = document.createElement('td');
     tdNum.textContent = String(i + 1);
     tdNum.className = 'row-num-cell align-right';
     tr.appendChild(tdNum);
 
-    for (let j = 0; j < row.length; j++) {
+    const addCell = (j: number): void => {
       const td = document.createElement('td');
       const inDiff = diffCols.has(j);
       const movAvgWin = movAvgCols.get(j);
@@ -655,9 +687,12 @@ function renderBody(): void {
       td.dataset.colIndex = String(j);
       td.className = (j === 0 ? 'align-left col-first' : 'align-left') + extraCls;
       applyFixedWidth(td, j);
-      td.addEventListener('click', e => handleColumnClick(j, e as MouseEvent));
       tr.appendChild(td);
-    }
+    };
+    if (colCount > 0) addCell(0);
+    if (c0 > 1) tr.appendChild(spacerCell(c0 - 1));
+    for (let j = c0; j <= c1; j++) addCell(j);
+    if (c1 < colCount - 1) tr.appendChild(spacerCell(colCount - 1 - c1));
     frag.appendChild(tr);
   }
   tbody.appendChild(frag);

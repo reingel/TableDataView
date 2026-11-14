@@ -5,12 +5,23 @@ import { CompareViewProvider } from './compareViewProvider';
 
 const DATA_EXTS = ['.csv', '.tsv', '.txt', '.dat'];
 
+// Selecting a file in the Explorer opens it as a text editor, so opening the
+// table / compare view usually leaves those raw-text tabs behind. Close them once
+// the view takes over. Tabs with unsaved edits are kept so nothing is lost.
+async function closeTextTabs(uris: vscode.Uri[]): Promise<void> {
+  const targets = new Set(uris.map(u => u.toString()));
+  const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs).filter(t =>
+    t.input instanceof vscode.TabInputText && !t.isDirty && targets.has(t.input.uri.toString())
+  );
+  if (tabs.length > 0) await vscode.window.tabGroups.close(tabs);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new TableViewProvider(context);
   const compareProvider = new CompareViewProvider(context);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('tableDataView.openTableView', (uri?: vscode.Uri) => {
+    vscode.commands.registerCommand('tableDataView.openTableView', async (uri?: vscode.Uri) => {
       if (!uri) {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
@@ -19,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         uri = editor.document.uri;
       }
+      await closeTextTabs([uri]);
       provider.createOrShowPanel(uri);
     })
   );
@@ -43,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!picked || picked.length === 0) {
           return;
         }
+        await closeTextTabs([picked[0], files[0]]);
         compareProvider.createOrShowPanel(picked[0], files[0]);
         return;
       }
@@ -54,6 +67,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage('TableDataView: Select exactly 2 data files to compare.');
         return;
       }
+      await closeTextTabs(files);
       compareProvider.createOrShowPanel(files[0], files[1]);
     })
   );

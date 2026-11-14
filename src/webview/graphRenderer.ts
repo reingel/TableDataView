@@ -14,10 +14,7 @@ let crosshairOrigRowIdx: number | null = null;
 let crosshair2DataX: number | null = null;
 let crosshair2OrigRowIdx: number | null = null;
 let lastHeaders: string[] = [];
-let lastRows: string[][] = [];
 let lastCols: number[] = [];
-let displayRows: string[][] = [];
-let rowIndexMap: number[] = [];
 let rowHighlightCallback: ((rowIdx: number) => void) | null = null;
 let canvasListenerAdded = false;
 let lastXAxisCol: number = 0;
@@ -26,7 +23,21 @@ let lastXAxisCol: number = 0;
 // we fall back to the row index instead. This tracks whether the x-axis column
 // still holds its original values.
 let lastXAxisIsOriginal: boolean = true;
-let lastRightData: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number; xAxisIsOriginal?: boolean } | undefined;
+let lastRightData: RightGraphData | undefined;
+
+// What the graph reads from a table: whole numeric columns (effective values,
+// cached by the caller so repeated renders don't re-parse) and the display
+// string of one cell for the value readout.
+export type GraphSource = {
+  rowCount: number;
+  column: (col: number) => Float64Array;
+  cell: (row: number, col: number) => string;
+};
+export type RightGraphData = {
+  headers: string[]; src: GraphSource; selectedCols: number[]; xAxisCol: number; xAxisIsOriginal?: boolean;
+};
+const EMPTY_SRC: GraphSource = { rowCount: 0, column: () => new Float64Array(0), cell: () => '' };
+let lastSrc: GraphSource = EMPTY_SRC;
 
 // Use the x-axis column's values as the x coordinate only when that column is
 // among the plotted columns AND it still holds its original (untransformed)
@@ -207,6 +218,13 @@ function buildHoverPath(dsIndex: number): number[] {
     pts.push(curX, minY, curX, maxY);
   };
   for (const el of els) {
+    // A gap point: break the path (NaN pair) like the chart's line does.
+    if (!isFinite(el.x) || !isFinite(el.y)) {
+      flush();
+      curX = NaN;
+      if (pts.length > 0 && !isNaN(pts[pts.length - 1])) pts.push(NaN, NaN);
+      continue;
+    }
     const px = Math.round(el.x);
     if (px !== curX) {
       flush();
@@ -264,8 +282,12 @@ function drawHoverOverlay(): void {
     if (pts.length < 2) continue;
     const color = chartInstance.data.datasets[i]._color as string;
     ctx.beginPath();
-    ctx.moveTo(pts[0], pts[1]);
-    for (let p = 2; p < pts.length; p += 2) ctx.lineTo(pts[p], pts[p + 1]);
+    let pen = false;
+    for (let p = 0; p < pts.length; p += 2) {
+      if (isNaN(pts[p])) { pen = false; continue; }
+      if (pen) ctx.lineTo(pts[p], pts[p + 1]); else ctx.moveTo(pts[p], pts[p + 1]);
+      pen = true;
+    }
     // Wide translucent halo first, then the bright line on top of it.
     ctx.strokeStyle = withAlpha(color, 0.35);
     ctx.lineWidth = lineWidth + HOVER_GLOW_WIDTH;
@@ -280,6 +302,7 @@ function drawHoverOverlay(): void {
 let extraYValuesCallback: (() => string) | null = null;
 export function setGraphDiffMode(mode: DiffMode): void {
   diffMode = mode;
+  seriesCache = null;
   redraw();
 }
 
@@ -288,13 +311,8 @@ export function setExtraYValuesCallback(fn: (() => string) | null): void {
 }
 
 export function setCrosshairToRow(rowIdx: number): void {
-  if (!chartInstance || lastRows.length === 0) return;
-  const useColAsX = colUsedAsX();
-  const dispIdx = rowIndexMap.indexOf(rowIdx);
-  const idx = dispIdx >= 0 ? dispIdx : rowIdx;
-  const xVal = useColAsX
-    ? parseFloat(displayRows[idx]?.[lastXAxisCol])
-    : ((rowIndexMap[idx] ?? rowIdx) + 1);
+  if (!chartInstance || lastSrc.rowCount === 0) return;
+  const xVal = rowX(rowIdx);
   if (!isFinite(xVal)) return;
   crosshairDataX = xVal;
   crosshairOrigRowIdx = rowIdx;
@@ -303,138 +321,226 @@ export function setCrosshairToRow(rowIdx: number): void {
 }
 
 type DataPoint = { x: number; y: number; rowIdx: number };
+// Line break marker in a dataset (rowIdx -1).
+const GAP_POINT: DataPoint = { x: NaN, y: NaN, rowIdx: -1 };
 
-function buildSegments(rows: string[][], xAxisCol: number, colIdx: number, useColAsX: boolean, indexMap: number[]): DataPoint[][] {
-  const segments: DataPoint[][] = [];
-  let cur: DataPoint[] = [];
-  rows.forEach((row, i) => {
-    const xVal = useColAsX ? parseFloat(row[xAxisCol]) : indexMap[i] + 1;
-    const yVal = parseFloat(row[colIdx]);
-    if (isFinite(xVal) && isFinite(yVal)) {
-      cur.push({ x: xVal, y: yVal, rowIdx: indexMap[i] });
-    } else if (cur.length > 0) {
-      segments.push(cur);
-      cur = [];
-    }
-  });
-  if (cur.length > 0) segments.push(cur);
-  return segments;
+// One plotted line before decimation: its full x/y columns (xs null = row
+// number) plus the styling every dataset cut from it shares.
+type Series = {
+  xs: Float64Array | null; ys: Float64Array; n: number;
+  label: string; color: string; dash?: number[];
+  col: number; rightCol?: number; side: 'left' | 'right';
+};
+
+// Rebuilt only when the plotted data changes (renderGraph / diff mode), so
+// pan and zoom reuse the same columns.
+let seriesCache: Series[] | null = null;
+
+function seriesX(s: Series, i: number): number {
+  return s.xs ? s.xs[i] : i + 1;
 }
 
-function buildDatasets(): any[] {
-  const useColAsX = colUsedAsX();
+// x coordinate of a (left-side) row on the graph.
+function rowX(rowIdx: number): number {
+  return colUsedAsX() ? lastSrc.column(lastXAxisCol)[rowIdx] : rowIdx + 1;
+}
+
+const monotonicCache = new WeakMap<Float64Array, boolean>();
+// Non-decreasing over its finite values: the precondition for decimating by x
+// bucket (an x-y plot that doubles back would be scrambled by it).
+function isMonotonic(xs: Float64Array | null): boolean {
+  if (!xs) return true;
+  let m = monotonicCache.get(xs);
+  if (m === undefined) {
+    m = true;
+    let prev = -Infinity;
+    for (let i = 0; i < xs.length; i++) {
+      const v = xs[i];
+      if (!isFinite(v)) continue;
+      if (v < prev) { m = false; break; }
+      prev = v;
+    }
+    monotonicCache.set(xs, m);
+  }
+  return m;
+}
+
+function buildSeries(): Series[] {
+  if (seriesCache) return seriesCache;
+  const out: Series[] = [];
+  const xs = colUsedAsX() ? lastSrc.column(lastXAxisCol) : null;
   const dataCols = getDataCols();
-  const result: any[] = [];
+  const rd = lastRightData;
 
-  if (diffMode !== 'original' && lastRightData) {
-    const rd = lastRightData;
+  if (diffMode !== 'original' && rd) {
     const rightDataCols = getRightDataCols();
-    const nRows = Math.min(displayRows.length, rd.rows.length);
-
+    const n = Math.min(lastSrc.rowCount, rd.src.rowCount);
+    const prefix = diffMode === '|L-R|' ? '|Δ|' : 'Δ';
     dataCols.forEach((leftCol, colorIdx) => {
       const rc = rightDataCols[colorIdx];
       if (rc === undefined) return;
-      const color = PALETTE[colorIdx % PALETTE.length];
-      const segments: DataPoint[][] = [];
-      let cur: DataPoint[] = [];
-      for (let i = 0; i < nRows; i++) {
-        const xVal = useColAsX ? parseFloat(displayRows[i][lastXAxisCol]) : rowIndexMap[i] + 1;
-        const lv = parseFloat(displayRows[i][leftCol]);
-        const rv = parseFloat(rd.rows[i][rc]);
-        if (isFinite(xVal) && isFinite(lv) && isFinite(rv)) {
-          const y = diffMode === 'R-L' ? rv - lv : diffMode === '|L-R|' ? Math.abs(lv - rv) : lv - rv;
-          cur.push({ x: xVal, y, rowIdx: rowIndexMap[i] });
-        } else if (cur.length > 0) { segments.push(cur); cur = []; }
+      const lv = lastSrc.column(leftCol);
+      const rv = rd.src.column(rc);
+      const ys = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        ys[i] = diffMode === 'R-L' ? rv[i] - lv[i] : diffMode === '|L-R|' ? Math.abs(lv[i] - rv[i]) : lv[i] - rv[i];
       }
-      if (cur.length > 0) segments.push(cur);
-      const labelPrefix = diffMode === '|L-R|' ? '|Δ|' : 'Δ';
-      segments.forEach((seg, si) => {
-        result.push({
-          label: si === 0 ? `${labelPrefix}${lastHeaders[leftCol]}` : '',
-          data: seg, tension: 0.1, fill: false,
-          borderWidth: lineWidth, borderColor: color, backgroundColor: color,
-          pointRadius: MARKER_RADIUS[markerStyle] ?? 0, showLine: true,
-          _col: leftCol, _rightCol: rc, _side: 'left', _color: color,
+      out.push({
+        xs, ys, n, label: `${prefix}${lastHeaders[leftCol]}`, color: PALETTE[colorIdx % PALETTE.length],
+        col: leftCol, rightCol: rc, side: 'left',
+      });
+    });
+  } else {
+    const labelPrefix = rd ? 'L: ' : '';
+    dataCols.forEach((col, colorIdx) => {
+      out.push({
+        xs, ys: lastSrc.column(col), n: lastSrc.rowCount, label: labelPrefix + lastHeaders[col],
+        color: PALETTE[colorIdx % PALETTE.length], col, side: 'left',
+      });
+    });
+    if (rd) {
+      const useRightColAsX = rd.selectedCols.includes(rd.xAxisCol) && (rd.xAxisIsOriginal ?? true);
+      const rxs = useRightColAsX ? rd.src.column(rd.xAxisCol) : null;
+      getRightDataCols().forEach((col, colorIdx) => {
+        out.push({
+          xs: rxs, ys: rd.src.column(col), n: rd.src.rowCount, label: 'R: ' + rd.headers[col],
+          color: PALETTE[(colorIdx + Math.ceil(PALETTE.length / 2)) % PALETTE.length], dash: [5, 3],
+          col, side: 'right',
         });
       });
-    });
-    return result;
+    }
   }
+  seriesCache = out;
+  return out;
+}
 
-  const hasRight = lastRightData !== undefined;
-  const labelPrefix = hasRight ? 'L: ' : '';
+// Cut a series into the points handed to Chart.js for the x window
+// [xMin, xMax]. Per bucket of width (xMax - xMin) / buckets only the
+// first/min/max/last points are kept, which draws the same picture as every
+// point at screen resolution but stays bounded by the canvas width rather than
+// the row count. The nearest point outside the window on each side is kept so
+// lines run to the edge.
+//
+// A NaN row breaks the line: one gap point (x/y NaN, which Chart.js skips and
+// doesn't connect across) instead of a separate dataset per segment. Chart.js
+// updates cost O(datasets^2), so a column with 5% blanks (~20k segments) froze
+// the view for tens of seconds. A gap narrower than a bucket (pixel) is
+// dropped, as it couldn't be seen anyway.
+function decimate(s: Series, xMin: number, xMax: number, buckets: number): DataPoint[] {
+  const out: DataPoint[] = [];
+  const ys = s.ys;
+  const pt = (i: number): DataPoint => ({ x: seriesX(s, i), y: ys[i], rowIdx: i });
+  const gap = () => {
+    if (out.length > 0 && out[out.length - 1].rowIdx >= 0) out.push(GAP_POINT);
+  };
 
-  dataCols.forEach((colIdx, colorIdx) => {
-    const color = PALETTE[colorIdx % PALETTE.length];
-    const segments = buildSegments(displayRows, lastXAxisCol, colIdx, useColAsX, rowIndexMap);
-    if (segments.length === 0) return;
-
-    segments.forEach((seg, si) => {
-      result.push({
-        label: si === 0 ? labelPrefix + lastHeaders[colIdx] : '',
-        data: seg,
-        tension: 0.1,
-        fill: false,
-        borderWidth: lineWidth,
-        borderColor: color,
-        backgroundColor: color,
-        pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
-        showLine: true,
-        _col: colIdx, _side: 'left', _color: color,
-      });
-    });
-  });
-
-  if (lastRightData) {
-    const rd = lastRightData;
-    const useRightColAsX = rd.selectedCols.includes(rd.xAxisCol) && (rd.xAxisIsOriginal ?? true);
-    const rightDataCols = rd.selectedCols.includes(rd.xAxisCol)
-      ? rd.selectedCols.filter(c => c !== rd.xAxisCol)
-      : rd.selectedCols;
-    const rightIndexMap = rd.rows.map((_, i) => i);
-
-    rightDataCols.forEach((colIdx, colorIdx) => {
-      const color = PALETTE[(colorIdx + Math.ceil(PALETTE.length / 2)) % PALETTE.length];
-      const segments = buildSegments(rd.rows, rd.xAxisCol, colIdx, useRightColAsX, rightIndexMap);
-      if (segments.length === 0) return;
-
-      segments.forEach((seg, si) => {
-        result.push({
-          label: si === 0 ? 'R: ' + rd.headers[colIdx] : '',
-          data: seg,
-          tension: 0.1,
-          fill: false,
-          borderWidth: lineWidth,
-          borderDash: [5, 3],
-          borderColor: color,
-          backgroundColor: color,
-          pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
-          showLine: true,
-          _col: colIdx, _side: 'right', _color: color,
-        });
-      });
-    });
+  if (!isMonotonic(s.xs)) {
+    for (let i = 0; i < s.n; i++) {
+      if (isFinite(seriesX(s, i)) && isFinite(ys[i])) out.push(pt(i));
+      else gap();
+    }
+  } else {
+    const bw = (xMax - xMin) / Math.max(1, buckets) || 1;
+    let bucket = NaN, iFirst = -1, iMin = -1, iMax = -1, iLast = -1;
+    const flush = () => {
+      if (iFirst < 0) return;
+      const idx = [iFirst, iMin, iMax, iLast].sort((a, b) => a - b);
+      for (let k = 0; k < 4; k++) if (k === 0 || idx[k] !== idx[k - 1]) out.push(pt(idx[k]));
+      iFirst = -1;
+    };
+    let before = -1;  // last finite point left of the window, not yet emitted
+    let pendingGap = false;  // NaN rows since the last finite point
+    for (let i = 0; i < s.n; i++) {
+      const x = seriesX(s, i), y = ys[i];
+      if (!isFinite(x) || !isFinite(y)) { pendingGap = true; before = -1; continue; }
+      if (x < xMin) { before = i; pendingGap = false; continue; }
+      if (before >= 0) { out.push(pt(before)); before = -1; }
+      if (x > xMax) {
+        flush();
+        if (pendingGap) gap();
+        out.push(pt(i));
+        break;
+      }
+      const b = Math.floor((x - xMin) / bw);
+      if (iFirst < 0 || b !== bucket) {
+        flush();
+        if (pendingGap) gap();
+        bucket = b;
+        iFirst = iMin = iMax = i;
+      } else {
+        if (y < ys[iMin]) iMin = i;
+        if (y > ys[iMax]) iMax = i;
+      }
+      pendingGap = false;
+      iLast = i;
+    }
+    flush();
   }
+  if (out.length > 0 && out[out.length - 1].rowIdx < 0) out.pop();
+  return out;
+}
 
-  return result;
+const xRangeCache = new WeakMap<Series, { min: number; max: number } | null>();
+
+function seriesXRange(s: Series): { min: number; max: number } | null {
+  if (xRangeCache.has(s)) return xRangeCache.get(s)!;
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < s.n; i++) {
+    const x = seriesX(s, i);
+    if (!isFinite(x) || !isFinite(s.ys[i])) continue;
+    if (x < min) min = x;
+    if (x > max) max = x;
+  }
+  const r = min === Infinity ? null : { min, max };
+  xRangeCache.set(s, r);
+  return r;
+}
+
+// Full (un-zoomed) x extent of everything plotted.
+function computeXRange(): { min: number; max: number } | null {
+  let min = Infinity, max = -Infinity;
+  for (const s of buildSeries()) {
+    const r = seriesXRange(s);
+    if (!r) continue;
+    if (r.min < min) min = r.min;
+    if (r.max > max) max = r.max;
+  }
+  return min === Infinity ? null : { min, max };
+}
+
+// One bucket per canvas pixel.
+function decimationBuckets(): number {
+  const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement | null;
+  return Math.max(200, Math.round(canvas?.clientWidth || 1000));
+}
+
+function buildDatasets(xMin: number, xMax: number, buckets: number): any[] {
+  return buildSeries().map(s => ({
+    label: s.label,
+    data: decimate(s, xMin, xMax, buckets),
+    tension: 0.1,
+    fill: false,
+    spanGaps: false,
+    borderWidth: lineWidth,
+    ...(s.dash ? { borderDash: s.dash } : {}),
+    borderColor: s.color,
+    backgroundColor: s.color,
+    pointRadius: MARKER_RADIUS[markerStyle] ?? 0,
+    showLine: true,
+    _col: s.col, ...(s.rightCol !== undefined ? { _rightCol: s.rightCol } : {}), _side: s.side, _color: s.color,
+  }));
 }
 
 const viewportPlugin = {
   id: 'viewportBox',
   afterDraw(chart: any) {
-    if (displayRows.length === 0 || !chart.scales.x) return;
+    const n = lastSrc.rowCount;
+    if (n === 0 || !chart.scales.x) return;
     const xScale = chart.scales.x;
-    const useColAsX = colUsedAsX();
-    const totalRows = lastRows.length;
-    const dispLen = displayRows.length;
-    const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
-    const si = Math.max(0, toIdx(viewportStartRow));
-    const ei = Math.min(dispLen - 1, toIdx(viewportEndRow));
-    const toXData = (i: number) => useColAsX
-      ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
-      : (rowIndexMap[i] + 1);
-    const startX = xScale.getPixelForValue(toXData(si));
-    const endX = xScale.getPixelForValue(toXData(ei));
+    const si = Math.max(0, viewportStartRow);
+    const ei = Math.min(n - 1, viewportEndRow);
+    const startX = xScale.getPixelForValue(rowX(si) || 0);
+    const endX = xScale.getPixelForValue(rowX(ei) || 0);
     if (endX <= startX) return;
     const { top, bottom } = chart.chartArea;
     const ctx = chart.ctx;
@@ -479,14 +585,12 @@ function downsampleMinimap(datasets: any[]): Minimap {
   return { xRange: { min: xmin, max: xmax }, yRange: { min: ymin, max: ymax }, series };
 }
 
-// Cached by reference so panning/zooming (which keep the same data) reuse it.
-function getMainMinimap(datasets: any[]): Minimap {
-  const key = [lastRows, lastCols, lastRightData, lastXAxisCol, diffMode];
-  if (minimapCache && key.length === minimapKey.length && key.every((v, i) => v === minimapKey[i])) {
-    return minimapCache;
-  }
-  minimapKey = key;
-  minimapCache = downsampleMinimap(datasets);
+// Cached by series so panning/zooming (which keep the same data) reuse it.
+function getMainMinimap(xRange: { min: number; max: number } | null): Minimap {
+  const series = buildSeries();
+  if (minimapCache && minimapKey[0] === series) return minimapCache;
+  minimapKey = [series];
+  minimapCache = downsampleMinimap(xRange ? buildDatasets(xRange.min, xRange.max, 120) : []);
   return minimapCache;
 }
 
@@ -531,10 +635,13 @@ function drawMinimapBox(chart: any, mm: Minimap, zMin: number, zMax: number): Mi
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1;
     ctx.setLineDash(s.dash.length ? [2, 2] : []);
+    let pen = false;
     for (let i = 0; i < s.pts.length; i++) {
+      if (!isFinite(s.pts[i].x) || !isFinite(s.pts[i].y)) { pen = false; continue; }
       const px = mapX(s.pts[i].x);
       const py = mapY(s.pts[i].y);
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      if (pen) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+      pen = true;
     }
     ctx.stroke();
   }
@@ -685,79 +792,55 @@ function updateYValues(): void {
   const rd = lastRightData;
   const rightCols = getRightDataCols();
   const sections: string[] = [];
+  const L = lastSrc;
+  const hasR = (r: number) => !!rd && r < rd.src.rowCount;
+  const numL = (r: number, c: number) => L.column(c)[r];
+  const numR = (r: number, c: number | undefined) => c !== undefined && rd ? rd.src.column(c)[r] : NaN;
+  const diffOf = (lf: number, rf: number) =>
+    diffMode === 'R-L' ? rf - lf : diffMode === '|L-R|' ? Math.abs(lf - rf) : lf - rf;
+  const diffPrefix = diffMode === '|L-R|' ? '|Δ|' : 'Δ';
 
-  if (crosshairOrigRowIdx !== null) {
-    const row1L = lastRows[crosshairOrigRowIdx];
-    const row1R = rd?.rows[crosshairOrigRowIdx];
-    const xLabel1 = useColAsX
-      ? `${lastHeaders[lastXAxisCol]}=${row1L[lastXAxisCol]}`
-      : `Row ${crosshairOrigRowIdx + 1}`;
-    const parts1 = dataCols.map((c, i) => {
-      const lv = row1L[c];
-      if (diffMode !== 'original' && rd && row1R) {
-        const rc = rightCols[i];
-        const lf = parseFloat(lv), rf = rc !== undefined ? parseFloat(row1R[rc]) : NaN;
-        const diff = diffMode === 'R-L' ? rf - lf : diffMode === '|L-R|' ? Math.abs(lf - rf) : lf - rf;
-        const prefix = diffMode === '|L-R|' ? '|Δ|' : 'Δ';
-        return `<b>${prefix}${lastHeaders[c]}</b>:&nbsp;${isFinite(diff) ? formatNum(diff) : '–'}`;
+  const rowSection = (row: number): string => {
+    const xLabel = useColAsX
+      ? `${lastHeaders[lastXAxisCol]}=${L.cell(row, lastXAxisCol)}`
+      : `Row ${row + 1}`;
+    const parts = dataCols.map((c, i) => {
+      if (diffMode !== 'original' && hasR(row)) {
+        const diff = diffOf(numL(row, c), numR(row, rightCols[i]));
+        return `<b>${diffPrefix}${lastHeaders[c]}</b>:&nbsp;${isFinite(diff) ? formatNum(diff) : '–'}`;
       }
-      if (!rd || !row1R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
+      const lv = L.cell(row, c);
+      if (!hasR(row)) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
       const rc = rightCols[i];
-      const rv = rc !== undefined ? row1R[rc] : '–';
+      const rv = rc !== undefined ? rd!.src.cell(row, rc) : '–';
       return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;↔&nbsp;${rv}`;
     });
-    sections.push(`<span>${xLabel1}</span>&nbsp;&nbsp;${parts1.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
-  }
+    return `<span>${xLabel}</span>&nbsp;&nbsp;${parts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`;
+  };
 
-  if (crosshair2OrigRowIdx !== null) {
-    const row2L = lastRows[crosshair2OrigRowIdx];
-    const row2R = rd?.rows[crosshair2OrigRowIdx];
-    const xLabel2 = useColAsX
-      ? `${lastHeaders[lastXAxisCol]}=${row2L[lastXAxisCol]}`
-      : `Row ${crosshair2OrigRowIdx + 1}`;
-    const parts2 = dataCols.map((c, i) => {
-      const lv = row2L[c];
-      if (diffMode !== 'original' && rd && row2R) {
-        const rc = rightCols[i];
-        const lf = parseFloat(lv), rf = rc !== undefined ? parseFloat(row2R[rc]) : NaN;
-        const diff = diffMode === 'R-L' ? rf - lf : diffMode === '|L-R|' ? Math.abs(lf - rf) : lf - rf;
-        const prefix = diffMode === '|L-R|' ? '|Δ|' : 'Δ';
-        return `<b>${prefix}${lastHeaders[c]}</b>:&nbsp;${isFinite(diff) ? formatNum(diff) : '–'}`;
-      }
-      if (!rd || !row2R) return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}`;
-      const rc = rightCols[i];
-      const rv = rc !== undefined ? row2R[rc] : '–';
-      return `<b>${lastHeaders[c]}</b>:&nbsp;${lv}&nbsp;↔&nbsp;${rv}`;
-    });
-    sections.push(`<span>${xLabel2}</span>&nbsp;&nbsp;${parts2.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
-  }
+  if (crosshairOrigRowIdx !== null) sections.push(rowSection(crosshairOrigRowIdx));
+  if (crosshair2OrigRowIdx !== null) sections.push(rowSection(crosshair2OrigRowIdx));
 
   if (crosshairOrigRowIdx !== null && crosshair2OrigRowIdx !== null) {
-    const row1L = lastRows[crosshairOrigRowIdx];
-    const row2L = lastRows[crosshair2OrigRowIdx];
-    const row1R = rd?.rows[crosshairOrigRowIdx];
-    const row2R = rd?.rows[crosshair2OrigRowIdx];
+    const r1 = crosshairOrigRowIdx, r2 = crosshair2OrigRowIdx;
+    const bothR = hasR(r1) && hasR(r2);
     let dxLabel: string;
     if (useColAsX) {
-      const dx = parseFloat(row2L[lastXAxisCol]) - parseFloat(row1L[lastXAxisCol]);
+      const dx = numL(r2, lastXAxisCol) - numL(r1, lastXAxisCol);
       dxLabel = `Δ${lastHeaders[lastXAxisCol]}=${formatNum(dx)}`;
     } else {
-      dxLabel = `ΔRow=${crosshair2OrigRowIdx - crosshairOrigRowIdx}`;
+      dxLabel = `ΔRow=${r2 - r1}`;
     }
     const dParts = dataCols.map((c, i) => {
-      const diffL = parseFloat(row2L[c]) - parseFloat(row1L[c]);
-      if (diffMode !== 'original' && rd && row1R && row2R) {
-        const rc = rightCols[i];
-        const lf1 = parseFloat(row1L[c]), rf1 = rc !== undefined ? parseFloat(row1R[rc]) : NaN;
-        const lf2 = parseFloat(row2L[c]), rf2 = rc !== undefined ? parseFloat(row2R[rc]) : NaN;
-        const d1 = diffMode === 'R-L' ? rf1 - lf1 : diffMode === '|L-R|' ? Math.abs(lf1 - rf1) : lf1 - rf1;
-        const d2 = diffMode === 'R-L' ? rf2 - lf2 : diffMode === '|L-R|' ? Math.abs(lf2 - rf2) : lf2 - rf2;
-        const prefix = diffMode === '|L-R|' ? '|Δ|' : 'Δ';
-        return `<b>ΔΔ${prefix}${lastHeaders[c]}</b>:&nbsp;${isFinite(d2 - d1) ? formatNum(d2 - d1) : '–'}`;
-      }
-      if (!rd || !row1R || !row2R) return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}`;
+      const diffL = numL(r2, c) - numL(r1, c);
       const rc = rightCols[i];
-      const diffR = rc !== undefined ? parseFloat(row2R[rc]) - parseFloat(row1R[rc]) : NaN;
+      if (diffMode !== 'original' && bothR) {
+        const d1 = diffOf(numL(r1, c), numR(r1, rc));
+        const d2 = diffOf(numL(r2, c), numR(r2, rc));
+        return `<b>ΔΔ${diffPrefix}${lastHeaders[c]}</b>:&nbsp;${isFinite(d2 - d1) ? formatNum(d2 - d1) : '–'}`;
+      }
+      if (!bothR) return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}`;
+      const diffR = numR(r2, rc) - numR(r1, rc);
       return `<b>Δ${lastHeaders[c]}</b>:&nbsp;${formatNum(diffL)}&nbsp;↔&nbsp;${formatNum(diffR)}`;
     });
     sections.push(`<span>${dxLabel}</span>&nbsp;&nbsp;${dParts.join('&nbsp;&nbsp;|&nbsp;&nbsp;')}`);
@@ -928,13 +1011,11 @@ function applyZoom(): void {
   redraw();
 }
 
-// Chart.js' 'index' interaction mode assumes every dataset shares one point
-// index space: it locates the nearest point, then hands back data[thatIndex] of
-// each dataset. NaN breaks the assumption — buildSegments splits a column with
-// NaN gaps into several segment datasets, so the same array index means a
-// different row in each of them, and when the first dataset is shorter than the
-// index there is no element at all and the click silently did nothing. Pick the
-// nearest plotted point ourselves; every point carries its own row index.
+// Nearest row (by x) among everything plotted. Searches the full columns, not
+// the decimated points on the chart, so the crosshair lands on an exact row;
+// rows with a NaN x or y aren't plotted and are skipped. (Chart.js' 'index'
+// hit-testing can't be used: NaN gaps split a column into several datasets
+// whose array indexes mean different rows.)
 function findNearestPoint(e: MouseEvent): DataPoint | null {
   if (!chartInstance) return null;
   const px = getCanvasPixelX(e);
@@ -946,10 +1027,11 @@ function findNearestPoint(e: MouseEvent): DataPoint | null {
   if (dataX === undefined || !isFinite(dataX)) return null;
   let best: DataPoint | null = null;
   let bestDist = Infinity;
-  for (const ds of chartInstance.data.datasets) {
-    for (const pt of ds.data as DataPoint[]) {
-      const d = Math.abs(pt.x - dataX);
-      if (d < bestDist) { bestDist = d; best = pt; }
+  for (const s of buildSeries()) {
+    for (let i = 0; i < s.n; i++) {
+      const x = seriesX(s, i);
+      const d = Math.abs(x - dataX);
+      if (d < bestDist && isFinite(s.ys[i])) { bestDist = d; best = { x, y: s.ys[i], rowIdx: i }; }
     }
   }
   return best;
@@ -1218,6 +1300,105 @@ function redrawFFT(): void {
   updateFftYValues();
 }
 
+// ---- PNG export ----
+
+export type GraphExportOptions = {
+  width: number; height: number;   // logical (CSS) px
+  pixelRatio: number;              // output px per CSS px
+  legend: 'top' | 'right' | 'left' | 'bottom';
+  minimap: boolean;
+};
+
+export function getGraphCanvasSize(): { width: number; height: number } | null {
+  return chartInstance ? { width: chartInstance.width, height: chartInstance.height } : null;
+}
+
+// Renders the current graph (same series and visible x/y range) onto an
+// offscreen canvas in a light, print-friendly style and returns a PNG data URL.
+// Interactive overlays (crosshair, table viewport box, drag selection) are left out.
+export function exportGraphPng(opts: GraphExportOptions): string | null {
+  if (!chartInstance) return null;
+  const xs = chartInstance.scales.x, ys = chartInstance.scales.y;
+  const TEXT = '#222';
+  const GRID = 'rgba(0,0,0,0.12)';
+
+  const whiteBackgroundPlugin = {
+    id: 'exportWhiteBackground',
+    beforeDraw(chart: any) {
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, chart.width, chart.height);
+      ctx.restore();
+    },
+  };
+  // Same box as the on-screen minimap, but without touching its hit-test rect.
+  const exportMinimapPlugin = {
+    id: 'exportMinimap',
+    afterDraw(chart: any) {
+      if (zoomXMin !== null && zoomXMax !== null && currentMinimap) {
+        drawMinimapBox(chart, currentMinimap, zoomXMin, zoomXMax);
+      }
+    },
+  };
+
+  const canvas = document.createElement('canvas');
+  canvas.width = opts.width;
+  canvas.height = opts.height;
+  // Chart.js measures through the DOM, so the canvas has to be attached.
+  canvas.style.cssText = `position:fixed;left:-100000px;top:0;width:${opts.width}px;height:${opts.height}px;`;
+  document.body.appendChild(canvas);
+  let chart: any = null;
+  try {
+    chart = new Chart(canvas.getContext('2d')!, {
+      type: 'scatter',
+      data: { datasets: buildDatasets(xs.min, xs.max, opts.width) },
+      options: {
+        responsive: false,
+        animation: false,
+        devicePixelRatio: opts.pixelRatio,
+        color: TEXT,
+        plugins: {
+          legend: {
+            display: getDataCols().length > 1 || lastRightData !== undefined,
+            position: opts.legend,
+            labels: { filter: (item: any) => item.text !== '', color: TEXT },
+          },
+          tooltip: { enabled: false },
+        },
+        scales: {
+          x: {
+            type: 'linear', min: xs.min, max: xs.max,
+            title: { display: true, text: chartInstance.options.scales.x.title.text, color: TEXT },
+            grid: { color: GRID },
+            ticks: { includeBounds: false, color: TEXT },
+          },
+          y: {
+            min: ys.min, max: ys.max,
+            title: { display: true, text: chartInstance.options.scales.y.title.text, color: TEXT },
+            grid: { color: GRID },
+            ticks: { includeBounds: false, color: TEXT },
+          },
+        },
+      },
+      plugins: [whiteBackgroundPlugin, zeroLinePlugin, ...(opts.minimap ? [exportMinimapPlugin] : [])],
+    });
+    return canvas.toDataURL('image/png');
+  } finally {
+    chart?.destroy();
+    canvas.remove();
+  }
+}
+
+// The x range currently on screen (zoom / pan included), or null when no graph
+// is drawn. isRowIndex: the graph plots against row number (1-based), not the
+// x-axis column, so min/max are row numbers.
+export function getVisibleXWindow(): { min: number; max: number; isRowIndex: boolean } | null {
+  const xs = chartInstance?.scales?.x;
+  if (!xs || !isFinite(xs.min) || !isFinite(xs.max)) return null;
+  return { min: xs.min, max: xs.max, isRowIndex: !colUsedAsX() };
+}
+
 export function resetZoom(): void {
   zoomXMin = null;
   zoomXMax = null;
@@ -1243,8 +1424,8 @@ export function hideCrosshairs(): void {
 }
 
 export function renderGraph(
-  headers: string[], rows: string[][], selectedCols: number[], xAxisCol: number = 0,
-  rightData?: { headers: string[]; rows: string[][]; selectedCols: number[]; xAxisCol: number; xAxisIsOriginal?: boolean },
+  headers: string[], src: GraphSource, selectedCols: number[], xAxisCol: number = 0,
+  rightData?: RightGraphData,
   xAxisIsOriginal: boolean = true
 ): void {
   if (xAxisCol !== lastXAxisCol) {
@@ -1253,14 +1434,12 @@ export function renderGraph(
   }
 
   lastHeaders = headers;
-  lastRows = rows;
+  lastSrc = src;
   lastCols = selectedCols;
   lastXAxisCol = xAxisCol;
   lastXAxisIsOriginal = xAxisIsOriginal;
   lastRightData = rightData;
-
-  displayRows = rows;
-  rowIndexMap = rows.map((_, i) => i);
+  seriesCache = null;
 
   document.getElementById('graph-container')!.classList.remove('hidden');
   redraw();
@@ -1280,18 +1459,6 @@ function computeYRange(datasets: any[]): { min: number; max: number } | null {
   if (min === Infinity) return null;
   const pad = (max - min) * 0.05 || 1;
   return { min: min - pad, max: max + pad };
-}
-
-function computeXRange(datasets: any[]): { min: number; max: number } | null {
-  let min = Infinity, max = -Infinity;
-  for (const ds of datasets) {
-    for (const pt of ds.data as { x: number; y: number }[]) {
-      if (pt.x < min) min = pt.x;
-      if (pt.x > max) max = pt.x;
-    }
-  }
-  if (min === Infinity) return null;
-  return { min, max };
 }
 
 const zeroLinePlugin = {
@@ -1324,52 +1491,71 @@ const zeroLinePlugin = {
 function redraw(): void {
   const useColAsX = colUsedAsX();
   const xLabel = useColAsX ? lastHeaders[lastXAxisCol] : 'Row';
+  const yLabel = diffMode === 'L-R' ? 'L − R' : diffMode === 'R-L' ? 'R − L' : diffMode === '|L-R|' ? '|L − R|' : 'Value';
   const dataCols = getDataCols();
-  const datasets = buildDatasets();
+  const xRange = computeXRange();
+  const win = zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : xRange;
+  const datasets = win ? buildDatasets(win.min, win.max, decimationBuckets()) : [];
   const yRange = computeYRange(datasets);
-  const xRange = zoomXMin === null ? computeXRange(datasets) : null;
-  currentMinimap = zoomXMin === null ? null : getMainMinimap(datasets);
+  currentMinimap = zoomXMin === null ? null : getMainMinimap(xRange);
+  const legendDisplay = dataCols.length > 1 || lastRightData !== undefined;
 
-  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-  // Dataset indexes and point pixels both belong to the chart being replaced.
+  // Dataset indexes and point pixels both belong to the previous render.
   hoverPathCache.clear();
 
-  const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
-  chartInstance = new Chart(canvas.getContext('2d')!, {
-    type: 'scatter',
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      // Chart.js re-lays out on its own when the panel is resized; the overlay
-      // canvas has to be resized and redrawn with it.
-      onResize: () => scheduleHoverDraw(),
-      plugins: {
-        legend: {
-          display: dataCols.length > 1 || lastRightData !== undefined,
-          labels: { filter: (item: any) => item.text !== '' },
+  if (chartInstance) {
+    // Pan / zoom / restyle: swap data and ranges into the existing chart
+    // instead of tearing it down and rebuilding it.
+    chartInstance.data.datasets = datasets;
+    const o = chartInstance.options;
+    o.plugins.legend.display = legendDisplay;
+    o.scales.x.title.text = xLabel;
+    o.scales.x.min = win?.min;
+    o.scales.x.max = win?.max;
+    o.scales.y.title.text = yLabel;
+    o.scales.y.min = yRange?.min;
+    o.scales.y.max = yRange?.max;
+    chartInstance.update('none');
+  } else {
+    const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
+    chartInstance = new Chart(canvas.getContext('2d')!, {
+      type: 'scatter',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        // Chart.js re-lays out on its own when the panel is resized; the overlay
+        // canvas has to be resized and redrawn with it.
+        onResize: () => scheduleHoverDraw(),
+        plugins: {
+          legend: {
+            display: legendDisplay,
+            labels: { filter: (item: any) => item.text !== '' },
+          },
+          tooltip: { enabled: false },
         },
-        tooltip: { enabled: false },
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: xLabel },
+            grid: { color: 'rgba(128,128,128,0.3)' },
+            ticks: { includeBounds: false },
+            min: win?.min,
+            max: win?.max,
+          },
+          y: {
+            title: { display: true, text: yLabel },
+            grid: { color: 'rgba(128,128,128,0.3)' },
+            ticks: { includeBounds: false },
+            min: yRange?.min,
+            max: yRange?.max,
+          },
+        },
       },
-      scales: {
-        x: {
-          type: 'linear',
-          title: { display: true, text: xLabel },
-          grid: { color: 'rgba(128,128,128,0.3)' },
-          ticks: { includeBounds: false },
-          ...(zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : xRange ? { min: xRange.min, max: xRange.max } : {}),
-        },
-        y: {
-          title: { display: true, text: diffMode === 'L-R' ? 'L − R' : diffMode === 'R-L' ? 'R − L' : diffMode === '|L-R|' ? '|L − R|' : 'Value' },
-          grid: { color: 'rgba(128,128,128,0.3)' },
-          ticks: { includeBounds: false },
-          ...(yRange ? { min: yRange.min, max: yRange.max } : {}),
-        },
-      },
-    },
-    plugins: [viewportPlugin, zeroLinePlugin, crosshairPlugin, dragSelectPlugin, minimapPlugin],
-  });
+      plugins: [viewportPlugin, zeroLinePlugin, crosshairPlugin, dragSelectPlugin, minimapPlugin],
+    });
+  }
 
   updateYValues();
   // The highlight lives on its own canvas, so it has to follow the new geometry.
@@ -1390,19 +1576,11 @@ export function updateViewport(startRow: number, endRow: number): void {
   if (!chartInstance) return;
 
   if (zoomXMin !== null && zoomXMax !== null) {
-    const scale = chartInstance.scales.x;
-    const totalRows = lastRows.length;
-    const dispLen = displayRows.length;
-    const toIdx = (r: number) => Math.round(r / Math.max(1, totalRows - 1) * Math.max(1, dispLen - 1));
-    const useColAsX = colUsedAsX();
-    const toXData = (i: number) => useColAsX
-      ? (parseFloat(displayRows[i]?.[lastXAxisCol]) || 0)
-      : (rowIndexMap[i] + 1);
-
-    const si = Math.max(0, toIdx(startRow));
-    const ei = Math.min(dispLen - 1, toIdx(endRow));
-    const boxMin = toXData(si);
-    const boxMax = toXData(ei);
+    const n = lastSrc.rowCount;
+    const si = Math.max(0, startRow);
+    const ei = Math.min(n - 1, endRow);
+    const boxMin = rowX(si) || 0;
+    const boxMax = rowX(ei) || 0;
     const zoomSpan = zoomXMax - zoomXMin;
     let panned = false;
     if (boxMax - boxMin > zoomSpan) {
@@ -1449,15 +1627,22 @@ export function closeFFTPane(): void {
   document.getElementById('fft-yvalues')?.classList.add('hidden');
 }
 
-export function renderFFTPane(
-  headers: string[], rows: string[][], fftColList: number[], xAxisCol: number
+// rowIdx: the rows to transform (null = all of them).
+function renderFFTPane(
+  headers: string[], src: GraphSource, rowIdx: number[] | null, fftColList: number[], xAxisCol: number
 ): void {
   if (fftColList.length === 0) { closeFFTPane(); return; }
+  const count = rowIdx ? rowIdx.length : src.rowCount;
+  const pick = (col: Float64Array): number[] => {
+    const out = new Array<number>(count);
+    for (let k = 0; k < count; k++) out[k] = col[rowIdx ? rowIdx[k] : k];
+    return out;
+  };
 
   // Determine sample rate from x-axis column values
   let sampleRate = 1;
-  if (rows.length >= 2) {
-    const xVals = rows.map(r => parseFloat(r[xAxisCol])).filter(v => isFinite(v));
+  if (count >= 2 && xAxisCol >= 0) {
+    const xVals = pick(src.column(xAxisCol)).filter(v => isFinite(v));
     if (xVals.length >= 2) {
       const dt = (xVals[xVals.length - 1] - xVals[0]) / (xVals.length - 1);
       if (dt > 0) sampleRate = 1 / dt;
@@ -1467,7 +1652,7 @@ export function renderFFTPane(
   const datasets: any[] = [];
   const MAX_PTS = 2000;
   fftColList.forEach((colIdx, ci) => {
-    const signal = rows.map(r => parseFloat(r[colIdx]));
+    const signal = pick(src.column(colIdx));
     const { freqs, amplitudesDb } = computeFFT(signal, sampleRate);
     if (freqs.length === 0) return;
 
@@ -1517,19 +1702,19 @@ export function renderFFTPaneFromGraph(): void {
   // FFT operates only on the data currently visible in the time graph, i.e. the
   // rows whose x-value falls inside the active zoom window. With no zoom the
   // whole signal is visible and used.
-  let rows = displayRows;
+  let rows: number[] | null = null;
   if (zoomXMin !== null && zoomXMax !== null) {
-    const useColAsX = colUsedAsX();
-    rows = displayRows.filter((row, i) => {
-      const x = useColAsX ? parseFloat(row[lastXAxisCol]) : rowIndexMap[i] + 1;
-      return isFinite(x) && x >= zoomXMin! && x <= zoomXMax!;
-    });
+    rows = [];
+    for (let i = 0; i < lastSrc.rowCount; i++) {
+      const x = rowX(i);
+      if (isFinite(x) && x >= zoomXMin && x <= zoomXMax) rows.push(i);
+    }
   }
 
   // When the x-axis column isn't used as x (not selected or transformed), the
   // signal is index-sampled, so derive the FFT sample rate from the index too
   // (xAxisCol = -1 -> no usable x values -> sample rate defaults to 1).
-  renderFFTPane(lastHeaders, rows, dataCols, colUsedAsX() ? lastXAxisCol : -1);
+  renderFFTPane(lastHeaders, lastSrc, rows, dataCols, colUsedAsX() ? lastXAxisCol : -1);
 }
 
 export function isFFTPaneVisible(): boolean {
@@ -1539,6 +1724,7 @@ export function isFFTPaneVisible(): boolean {
 
 export function closeGraph(): void {
   diffMode = 'original';
+  seriesCache = null;
   crosshairDataX = null;
   crosshairOrigRowIdx = null;
   crosshair2DataX = null;

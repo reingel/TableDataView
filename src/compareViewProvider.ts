@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { WebviewToExtensionMessage } from './types';
 import { streamParseAndSend } from './webviewStream';
+import { saveGraphImage } from './saveImage';
 
 const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024;
 
@@ -52,6 +53,12 @@ export class CompareViewProvider {
     panel.webview.onDidReceiveMessage((msg: WebviewToExtensionMessage) => {
       if (msg.type === 'ready' || msg.type === 'reload') {
         this.loadFiles(panel, uri1, uri2);
+      } else if (msg.type === 'saveGraphImage') {
+        const base = (u: vscode.Uri) => path.basename(u.fsPath, path.extname(u.fsPath));
+        saveGraphImage(msg.dataUrl, vscode.Uri.joinPath(uri1, '..', `${base(uri1)}_vs_${base(uri2)}.png`));
+      } else if (msg.type === 'notify') {
+        if (msg.level === 'warning') vscode.window.showWarningMessage(`TableDataView: ${msg.message}`);
+        else vscode.window.showInformationMessage(`TableDataView: ${msg.message}`);
       }
     });
   }
@@ -471,6 +478,7 @@ export class CompareViewProvider {
     td.col-has-diff { background: rgba(210, 60, 60, 0.35) !important; }
     th.col-has-diff { box-shadow: inset 0 0 0 9999px rgba(210, 60, 60, 0.35); }
     td.value-diff { background: rgba(210, 60, 60, 0.35) !important; }
+    td.missing-row { padding: 0; border: none; background: repeating-linear-gradient(45deg, transparent 0 6px, rgba(128, 128, 128, 0.08) 6px 12px); }
     #graph-container {
       flex-shrink: 0;
       height: 42vh;
@@ -487,6 +495,25 @@ export class CompareViewProvider {
       background: var(--vscode-titleBar-activeBackground, #333);
       flex-shrink: 0;
     }
+    #graph-header { position: relative; }
+    #graph-save-popover {
+      position: absolute; right: 8px; top: 100%; z-index: 200;
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 8px 10px; min-width: 230px;
+      background: var(--vscode-menu-background, #252526);
+      color: var(--vscode-menu-foreground, inherit);
+      border: 1px solid var(--vscode-menu-border, #454545);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      font-size: 0.85em;
+    }
+    #graph-save-popover.hidden { display: none; }
+    #graph-save-popover label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    #graph-save-popover label.chk { justify-content: flex-start; }
+    #graph-save-popover select {
+      background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border); padding: 1px 4px; font-size: 1em;
+    }
+    #graph-save-popover .buttons { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
     #graph-yvalues { flex: 1; font-size: 0.8em; white-space: nowrap; overflow-x: auto; min-width: 0; }
     #graph-resize-handle {
       height: 5px;
@@ -506,9 +533,8 @@ export class CompareViewProvider {
     <button id="btn-left">Left</button>
     <button id="btn-right">Right</button>
     <div class="toolbar-sep"></div>
-    <button id="btn-scale" title="Show the per-column scale row">Scale</button>
-    <button id="btn-offset" title="Show the per-column offset row">Offset</button>
-    <button id="btn-show-graph" disabled>Show Graph</button>
+    <button id="btn-scale-offset" title="Show the per-column scale and offset rows">Scale/Offset</button>
+    <button id="btn-show-graph" disabled>Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
     <div class="toolbar-sep"></div>
     <span id="left-file-name" class="file-name"></span>
@@ -517,7 +543,7 @@ export class CompareViewProvider {
     <span id="truncate-notice" class="hidden"></span>
     <button id="btn-swap" title="Swap left and right files" style="margin-left:auto;">&#x21c4; Swap</button>
     <button id="btn-reload">&#x21bb; Reload</button>
-    <button id="btn-toggle-header" title="Show column list">&#x2630; Header</button>
+    <button id="btn-toggle-header" class="active" title="Show column list">&#x2630; Header</button>
   </div>
 
   <div id="main-row">
@@ -527,8 +553,8 @@ export class CompareViewProvider {
           <thead>
             <tr id="left-col-index-row" class="col-index-row"></tr>
             <tr id="left-header-row" class="header-row"></tr>
-            <tr id="left-scale-row" class="scale-row hidden"></tr>
-            <tr id="left-offset-row" class="offset-row hidden"></tr>
+            <tr id="left-scale-row" class="scale-row"></tr>
+            <tr id="left-offset-row" class="offset-row"></tr>
           </thead>
           <tbody id="left-data-body"></tbody>
         </table>
@@ -539,15 +565,15 @@ export class CompareViewProvider {
           <thead>
             <tr id="right-col-index-row" class="col-index-row"></tr>
             <tr id="right-header-row" class="header-row"></tr>
-            <tr id="right-scale-row" class="scale-row hidden"></tr>
-            <tr id="right-offset-row" class="offset-row hidden"></tr>
+            <tr id="right-scale-row" class="scale-row"></tr>
+            <tr id="right-offset-row" class="offset-row"></tr>
           </thead>
           <tbody id="right-data-body"></tbody>
         </table>
       </div>
     </div>
 
-    <div id="header-panel" class="hidden">
+    <div id="header-panel">
       <div id="header-panel-title">Columns</div>
       <ul id="header-panel-list" class="col-list"></ul>
     </div>
@@ -572,6 +598,10 @@ export class CompareViewProvider {
       <li id="ctx-match-sep" class="ctx-separator"></li>
       <li id="ctx-match-with">Match with…</li>
       <li id="ctx-clear-match" class="hidden">Clear match</li>
+      <li id="ctx-sync-sep" class="ctx-separator hidden"></li>
+      <li id="ctx-sync" class="hidden">Sync with right data</li>
+      <li id="ctx-reset-sync" class="hidden">Reset sync</li>
+      <li id="ctx-sync-sep2" class="ctx-separator hidden"></li>
       <li id="ctx-show-hex">Show in hex</li>
       <li id="ctx-show-diff">Show numerical differences</li>
       <li id="ctx-show-movavg-10">Show moving averages (n=10)</li>
@@ -624,7 +654,29 @@ export class CompareViewProvider {
           <option value="circle">o</option>
         </select>
       </label>
-      <button id="btn-close-graph">&#x2715; Close</button>
+      <button id="btn-save-graph" title="Save graph as PNG">Save</button>
+      <button id="btn-close-graph" title="Close graph">&#x2715;</button>
+      <div id="graph-save-popover" class="hidden">
+        <label>Size
+          <select id="sel-save-size">
+            <option value="current" selected>Current view</option>
+            <option value="in8x6">8 × 6 in (150 dpi)</option>
+          </select>
+        </label>
+        <label>Legend
+          <select id="sel-save-legend">
+            <option value="top" selected>Top</option>
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+            <option value="bottom">Bottom</option>
+          </select>
+        </label>
+        <label class="chk"><input type="checkbox" id="chk-save-minimap"> Show minimap</label>
+        <div class="buttons">
+          <button id="btn-save-graph-cancel">Cancel</button>
+          <button id="btn-save-graph-ok">Save…</button>
+        </div>
+      </div>
     </div>
     <div id="chart-canvas-wrapper"><canvas id="chart-canvas"></canvas></div>
   </div>

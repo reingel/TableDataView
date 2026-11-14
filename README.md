@@ -12,11 +12,13 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
 ### Table View
 - Row index column on the left and column index row at the top for easy reference
 - First column is pinned (sticky) and stays visible while scrolling horizontally
-- Virtual scrolling — handles large files with tens of thousands of rows smoothly
+- Virtual scrolling (rows and columns) — stays responsive on large files (tested with 430,000 rows × 140 columns)
 - Click a column header or any cell to select that column
   - **Shift+click** to select a range of columns
   - **Ctrl/Cmd+click** to toggle individual columns in a multi-selection
 - **Mouse drag** to scroll the table in any direction
+- The first column click (in the table or the Header panel) opens the graph for that column automatically
+- **Header** panel — a column list on the right, shown by default; toggle it with the **☰ Header** toolbar button. Click (Shift / Ctrl/Cmd) to select columns; right-click for the column menu
 
 ### Navigation
 | Button / Shortcut | Action |
@@ -60,25 +62,25 @@ At the bottom of the menu, column statistics are displayed (non-clickable):
 | Button | Description |
 |---|---|
 | **Top / Bottom / Left / Right** | Navigate to the edges of the table |
-| **Scale** | Toggles a **Scale** row under the header, one editable cell per column (default `1.0`) |
-| **Offset** | Toggles an **Offset** row under the Scale row (default `0.0`) |
-| **Show Graph** | Opens the graph panel for the selected columns |
+| **Scale/Offset** | Shows / hides the **Scale** and **Offset** rows under the header (shown by default), one editable cell per column (defaults `1.0` / `0.0`) |
+| **Graph** | Toggles the graph panel for the selected columns (also closable with **✕** on the graph panel) |
 | **Reset All** | Resets X-axis, hex, diff, moving average, scale, and offset for all columns. Shown only when any transform is active. |
 | **Reload** | Reloads the file from disk, preserving current scroll position and transforms |
 
 ### Scale and Offset
 
-Click **Scale** or **Offset** in the toolbar to add an editable row directly under the header
-(Scale first, then Offset). Type a value into any column's cell and press Enter: the table and
+Two editable rows sit directly under the header (Scale, then Offset); they are shown when a
+view opens and **Scale/Offset** in the toolbar hides or shows them. Type a value into any column's cell and press Enter: the table and
 the graph then show `value x scale + offset`, and the adjusted column is highlighted in purple.
-Values start at `1.0` / `0.0`, and hiding a row resets that factor for every column.
+Values start at `1.0` / `0.0`, and hiding the rows resets both factors for every column.
 
 Scale and offset stack on top of the diff / moving-average transforms and are preserved by
-**Reload**. In compare view, editing one side also updates the matched column on the other side.
+**Reload**. In compare view, scale and offset are independent per file: editing one side does not change
+the matched column on the other side.
 
 ### Graph View
 
-Select one or more columns, then click **Show Graph**.
+Select one or more columns, then click **Graph**. The first column click in a newly opened view opens the graph automatically.
 
 **Graph interactions:**
 
@@ -100,7 +102,8 @@ Select one or more columns, then click **Show Graph**.
 - Adjustable **Line width** (0.5 / 1.0 / 1.5 / 2.0 / 3.0)
 - **Marker** style (none / `.` / `o`) — defaults to `.`
 - **Hide Crosshair** — hides both crosshairs
-- **Close** — closes the graph panel
+- **Save** — saves the graph as a PNG. Options: size (current view, or 8 × 6 in at 150 dpi = 1200 × 900 px), legend position (top / right / left / bottom), and minimap (off by default). The image keeps the visible x/y range and uses a white background; a file dialog asks for the file name.
+- **✕** — closes the graph panel (the toolbar **Graph** button toggles it too)
 
 ---
 
@@ -110,8 +113,9 @@ Select two files in the Explorer, right-click, and choose **TableDataView: compa
 
 ### Layout
 - The two files are displayed side-by-side with synchronized horizontal and vertical scrolling
-- Cells where the two files differ are highlighted with a red background
+- Cells where the two files differ are highlighted with a red background. Numbers are compared by value, so `1.50` and `1.5` count as equal; text cells (dates, labels) are compared as text
 - Drag the center divider to resize the left and right panes
+- When the files have different row counts, every row of both files is shown; the shorter side is padded with blank rows so scrolling stays aligned, and values are compared only over the rows both files have
 
 ### Column Matching
 When the two files have different numbers of columns, columns are matched by header name using a multi-tier strategy:
@@ -120,24 +124,30 @@ When the two files have different numbers of columns, columns are matched by hea
 3. Case-insensitive exact match
 4. Case-insensitive LCS similarity
 
+If a match is wrong or missing, use **Match with…** in the column's right-click menu to pick the column on the other side, or **Clear match** to unpair it. Manual matches survive **Reload** while the headers stay the same. In the Header panel, a pair whose names differ is shown as `left ↔ right`, updated as soon as the matching changes.
+
 ### Synchronized Operations
 All transforms apply to both sides simultaneously:
 - Column selection / deselection
 - X-axis assignment
-- Scale / offset
 - Hex display
 - Numerical differences
 - Moving averages
 - Scroll position
+
+Scale / offset values are independent per file (the Scale/Offset toggle itself is shared).
 
 ### Compare Right-Click Context Menu
 Includes the same items as the table view (except **Find prev./next change**), plus:
 
 | Menu item | Description |
 |---|---|
+| **Match with…** / **Clear match** | Manually pairs this column with a column on the other side, or removes the pairing |
 | **Go to next different row** | Jumps to the next row where this column's values differ between the two files |
 | **Go to prev. different row** | Jumps to the previous differing row |
 | **Find max. difference row** | Jumps to the row with the largest absolute difference in this column |
+| **Sync with right data** / **Sync with left data** | Finds the time shift with the highest correlation between this column and its matched column on the other side, using the x range visible in the graph (the other file's full range if the graph is closed), and writes it to the **Offset** of this side's x-axis column. Shown only when both sides use an untransformed time column as x-axis. |
+| **Reset sync** | Sets this side's x-axis column **Offset** back to `0.0`. Shown only when that offset is non-zero, on data columns and on the x-axis column itself. |
 
 ### Compare Graph
 Both files are plotted together — left-file series use solid lines, right-file series use dashed lines with offset colors.
@@ -161,9 +171,13 @@ All graph interactions (zoom, pan, crosshair, FFT) work the same as in the singl
 1. In the **Explorer** or **Editor tab**, right-click a supported file
 2. Select **TableDataView: table view**
 
+If the file is also open as a plain-text editor tab (e.g. from a single click in the Explorer), that tab is closed when the table view opens. Tabs with unsaved edits are left open.
+
 ### Compare View
 1. In the **Explorer**, select two supported files (Ctrl/Cmd+click to multi-select)
 2. Right-click and select **TableDataView: compare**
+
+As with the table view, plain-text editor tabs of the compared files are closed when the compare view opens (unless they have unsaved edits).
 
 With only one file selected, the same menu item opens a file picker — starting in that file's own folder — to choose the file for the left pane; the file you right-clicked becomes the right pane.
 
