@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.0
+- Large files: much faster response to column clicks, graph zoom/pan and table scrolling (numeric column cache, graph decimation, only visible columns rendered)
+- Large files: about half the memory; numbers are sent to the view as binary columns and only the rows on screen are split into cells
+- Large files: column context menu (stats), Go to max/min/NaN, Find next change and compare diff stats / Sync work on cached numeric columns
+- Graph: columns with many blank/NaN cells no longer freeze the view (a gap is a break in one line, not a separate series)
+- Compare: cells that differ only in number formatting (e.g. `1.50` vs `1.5`) are no longer marked as different; hex-displayed columns are no longer always marked as different
+
 ## 2.9.0
 - Compare: files with different row counts show every row (shorter side padded with blank rows)
 - Compare: scale / offset are independent per file

@@ -1,3 +1,5 @@
+import { TableRows } from './tableData';
+
 const selectedColumns = new Set<number>();
 let lastClickedIndex: number | null = null;
 let totalColumns = 0;
@@ -11,14 +13,15 @@ let defaultXAxisCol: number = SEQ_X;
 
 const X_HEADER_PATTERN = /^(time|times|t|sec|secs|second|seconds|ms|msec|msecs|date|datetime|timestamp|ts|index|idx|no|num|n|count|sample|samples|step|steps|frame|frames|epoch|iter|iteration|x)$/i;
 
-function isMonotonicNumeric(rows: string[][], col: number): boolean {
+function isMonotonicNumeric(rows: TableRows, col: number): boolean {
   const lim = Math.min(rows.length, 500);
   if (lim < 2) return false;
-  let prev = parseFloat(rows[0]?.[col]);
+  const vals = rows.column(col);
+  let prev = vals[0];
   if (!isFinite(prev)) return false;
   let increased = false;
   for (let i = 1; i < lim; i++) {
-    const v = parseFloat(rows[i]?.[col]);
+    const v = vals[i];
     if (!isFinite(v)) return false;
     if (v < prev) return false;
     if (v > prev) increased = true;
@@ -30,7 +33,7 @@ function isMonotonicNumeric(rows: string[][], col: number): boolean {
 // The first column is treated as the x-axis only when it looks like an index or
 // time axis: either its header matches a known keyword, or its values are numeric
 // and monotonically increasing. Otherwise the x-axis defaults to the row sequence.
-export function detectDefaultXAxis(headers: string[], rows: string[][]): number {
+export function detectDefaultXAxis(headers: string[], rows: TableRows): number {
   if (headers.length === 0) return SEQ_X;
   const h = (headers[0] ?? '').trim().toLowerCase();
   if (X_HEADER_PATTERN.test(h) || h.includes('time') || h.includes('date')) return 0;
@@ -100,16 +103,16 @@ export function handleColumnClick(colIndex: number, event: MouseEvent): void {
   onSelectionChange?.();
 }
 
+// One pass over the cells; a query per column rescanned the whole document
+// once for every column.
 export function applyHighlight(): void {
-  for (let i = 0; i < totalColumns; i++) {
-    const cells = document.querySelectorAll<HTMLElement>(`[data-col-index="${i}"]`);
+  document.querySelectorAll<HTMLElement>('[data-col-index]').forEach(cell => {
+    const i = Number(cell.dataset.colIndex);
+    if (!(i >= 0 && i < totalColumns)) return;
     const isXAxis = i === xAxisCol;
-    const isSelected = selectedColumns.has(i) && !isXAxis;
-    cells.forEach(cell => {
-      cell.classList.toggle('selected', isSelected);
-      cell.classList.toggle('x-axis', isXAxis);
-    });
-  }
+    cell.classList.toggle('selected', selectedColumns.has(i) && !isXAxis);
+    cell.classList.toggle('x-axis', isXAxis);
+  });
 }
 
 export function restoreSelection(cols: number[], xAxis: number): void {

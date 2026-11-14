@@ -12,7 +12,7 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
 ### Table View
 - Row index column on the left and column index row at the top for easy reference
 - First column is pinned (sticky) and stays visible while scrolling horizontally
-- Virtual scrolling — handles large files with tens of thousands of rows smoothly
+- Virtual scrolling (rows and columns) — stays responsive on large files (tested with 430,000 rows × 140 columns)
 - Click a column header or any cell to select that column
   - **Shift+click** to select a range of columns
   - **Ctrl/Cmd+click** to toggle individual columns in a multi-selection
@@ -113,7 +113,7 @@ Select two files in the Explorer, right-click, and choose **TableDataView: compa
 
 ### Layout
 - The two files are displayed side-by-side with synchronized horizontal and vertical scrolling
-- Cells where the two files differ are highlighted with a red background
+- Cells where the two files differ are highlighted with a red background. Numbers are compared by value, so `1.50` and `1.5` count as equal; text cells (dates, labels) are compared as text
 - Drag the center divider to resize the left and right panes
 - When the files have different row counts, every row of both files is shown; the shorter side is padded with blank rows so scrolling stays aligned, and values are compared only over the rows both files have
 

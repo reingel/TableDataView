@@ -1,18 +1,21 @@
 import { initGraphSave } from './graphSave';
-import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { renderGraph, getVisibleXWindow, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
+import { ExtensionToWebviewMessage } from '../types';
+import { TableBuilder, TableFile } from './tableData';
+import { getColumnStore } from './columnCache';
+import { renderGraph, GraphSource, getVisibleXWindow, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
 import { detectDefaultXAxis, SEQ_X } from './columnSelector';
+import { visibleColumns, spacerCell } from './columnWindow';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
 const vscode = acquireVsCodeApi();
 
 type Side = 'left' | 'right';
 
-const BUFFER = 40;
+const BUFFER = 15;
 let ROW_HEIGHT = 24;
 
-let leftData: ParsedFile | null = null;
-let rightData: ParsedFile | null = null;
+let leftData: TableFile | null = null;
+let rightData: TableFile | null = null;
 // Rows shown in each pane: the longer file's length, so every row of both files
 // is visible. The shorter pane is padded with blank rows to keep scrolling in sync.
 let displayRowCount = 0;
@@ -51,17 +54,60 @@ const selectedCols: Record<Side, Set<number>> = { left: new Set(), right: new Se
 // Columns that have at least one differing cell (by side)
 const diffColumnSet: Record<Side, Set<number>> = { left: new Set(), right: new Set() };
 
+// Whether a matched pair differs, keyed by both columns and their transforms.
+// computeDiffColumns runs on every render (scroll frame); without this it
+// rescanned every row of every identical pair each time.
+const pairDiffCache = new Map<string, boolean>();
+let pairDiffData: [TableFile | null, TableFile | null] = [null, null];
+
+const IDENTITY_TRANSFORM = '|1|0';
+
+function transformKey(side: Side, col: number): string {
+  const t = diffCols[side].has(col) ? 'd' : movAvgCols[side].get(col) ?? '';
+  return `${t}|${getScale(side, col)}|${getOffset(side, col)}`;
+}
+
+// A cell's effective value for equality checks without building its display
+// string: its number, or its text when it has no number (blank -> ''). A text
+// cell (e.g. a date, see cellNumber) of an untransformed column compares as
+// text; once transformed the table shows its number, so that is compared.
+// Numbers compare by value, so "1.50" and "1.5" count as the same.
+function cellKeyFn(side: Side, col: number): (row: number) => number | string {
+  const data = (side === 'left' ? leftData : rightData)!;
+  const vals = effectiveColumn(side, col);
+  const transformed = transformKey(side, col) !== IDENTITY_TRANSFORM;
+  return row => {
+    const t = data.rows.text(row, col);
+    if (t !== undefined && !transformed) return t;
+    const v = vals[row];
+    return isFinite(v) ? v : (t ?? '');
+  };
+}
+
+function columnsDiffer(li: number, ri: number): boolean {
+  const L = cellKeyFn('left', li), R = cellKeyFn('right', ri);
+  for (let i = 0; i < commonRowCount; i++) if (L(i) !== R(i)) return true;
+  return false;
+}
+
 function computeDiffColumns(): void {
   diffColumnSet.left.clear();
   diffColumnSet.right.clear();
   if (!leftData || !rightData) return;
+  if (pairDiffData[0] !== leftData || pairDiffData[1] !== rightData) {
+    pairDiffCache.clear();
+    pairDiffData = [leftData, rightData];
+  }
   for (const [li, ri] of columnMapping) {
-    for (let i = 0; i < commonRowCount; i++) {
-      if (getCellValue('left', i, li) !== getCellValue('right', i, ri)) {
-        diffColumnSet.left.add(li);
-        diffColumnSet.right.add(ri);
-        break;
-      }
+    const key = `${li}:${transformKey('left', li)}/${ri}:${transformKey('right', ri)}`;
+    let differs = pairDiffCache.get(key);
+    if (differs === undefined) {
+      differs = columnsDiffer(li, ri);
+      pairDiffCache.set(key, differs);
+    }
+    if (differs) {
+      diffColumnSet.left.add(li);
+      diffColumnSet.right.add(ri);
     }
   }
 }
@@ -260,9 +306,9 @@ function buildDiffStatsHtml(): string {
     if (ri === undefined) continue;
     let maxAbsDiff = -1;
     let maxRow = -1;
+    const L = effectiveColumn('left', li), R = effectiveColumn('right', ri);
     for (let i = 0; i < commonRowCount; i++) {
-      const lv = parseFloat(getCellValue('left', i, li));
-      const rv = parseFloat(getCellValue('right', i, ri));
+      const lv = L[i], rv = R[i];
       if (!isFinite(lv) || !isFinite(rv)) continue;
       const d = Math.abs(lv - rv);
       if (d > maxAbsDiff) { maxAbsDiff = d; maxRow = i; }
@@ -271,7 +317,7 @@ function buildDiffStatsHtml(): string {
     const colName = leftData.headers[li];
     let atStr: string;
     if (useColAsX) {
-      const xVal = parseFloat(getCellValue('left', maxRow, xAxisCol.left));
+      const xVal = effectiveColumn('left', xAxisCol.left)[maxRow];
       atStr = `${leftData.headers[xAxisCol.left]}=${formatNum(xVal)}`;
     } else {
       atStr = `Row ${maxRow + 1}`;
@@ -305,8 +351,8 @@ function updateToolbar(): void {
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && leftData && rightData) {
     renderGraph(
-      leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
-      { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
+      leftData.headers, graphSource('left'), Array.from(selectedCols.left), xAxisCol.left,
+      { headers: rightData.headers, src: graphSource('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
       isXAxisOriginal('left')
     );
   }
@@ -325,12 +371,14 @@ function isXAxisOriginal(side: Side): boolean {
 function getDiffValue(side: Side, rowIdx: number, colIdx: number): string {
   const data = side === 'left' ? leftData : rightData;
   if (!data) return '';
-  const n = data.rows.length;
-  if (n < 2) return data.rows[rowIdx][colIdx];
+  const rows = data.rows;
+  const n = rows.length;
+  if (n < 2) return rows.cell(rowIdx, colIdx);
   const i = rowIdx < n - 1 ? rowIdx : n - 2;
-  const curr = parseFloat(data.rows[i + 1][colIdx]);
-  const prev = parseFloat(data.rows[i][colIdx]);
-  if (isNaN(curr) || isNaN(prev)) return data.rows[rowIdx][colIdx];
+  const vals = rows.column(colIdx);
+  const curr = vals[i + 1];
+  const prev = vals[i];
+  if (isNaN(curr) || isNaN(prev)) return rows.cell(rowIdx, colIdx);
   return String(curr - prev);
 }
 
@@ -339,11 +387,12 @@ function getMovAvgValue(side: Side, rowIdx: number, colIdx: number, windowSize: 
   if (!data) return '';
   const start = Math.max(0, rowIdx - windowSize + 1);
   let sum = 0, count = 0;
+  const vals = data.rows.column(colIdx);
   for (let i = start; i <= rowIdx; i++) {
-    const val = parseFloat(data.rows[i][colIdx]);
+    const val = vals[i];
     if (!isNaN(val)) { sum += val; count++; }
   }
-  return count > 0 ? String(sum / count) : data.rows[rowIdx][colIdx];
+  return count > 0 ? String(sum / count) : data.rows.cell(rowIdx, colIdx);
 }
 
 function getCellValue(side: Side, rowIdx: number, colIdx: number): string {
@@ -353,17 +402,32 @@ function getCellValue(side: Side, rowIdx: number, colIdx: number): string {
   if (diffCols[side].has(colIdx)) val = getDiffValue(side, rowIdx, colIdx);
   else {
     const ws = movAvgCols[side].get(colIdx);
-    val = ws !== undefined ? getMovAvgValue(side, rowIdx, colIdx, ws) : (data.rows[rowIdx]?.[colIdx] ?? '');
+    val = ws !== undefined ? getMovAvgValue(side, rowIdx, colIdx, ws) : data.rows.cell(rowIdx, colIdx);
   }
   return applyScaleOffset(side, colIdx, val);
 }
 
-function getEffectiveRows(side: Side): string[][] {
-  const data = side === 'left' ? leftData : rightData;
-  if (!data) return [];
-  return data.rows.map((row, i) =>
-    row.map((_, j) => getCellValue(side, i, j))
-  );
+// What the graph plots for one side: only the columns it asks for, from the
+// per-file numeric cache, with that side's transforms applied.
+function graphSource(side: Side): GraphSource {
+  return {
+    rowCount: sideRowCount(side),
+    column: col => effectiveColumn(side, col),
+    cell: (row, col) => getCellValue(side, row, col),
+  };
+}
+
+// A column's effective values (that side's diff / moving average /
+// scale+offset applied) as numbers, cached per file. Whole-column work
+// (stats, go to max diff / NaN, sync) reads this instead of formatting and
+// re-parsing every cell.
+function effectiveColumn(side: Side, col: number): Float64Array {
+  const data = (side === 'left' ? leftData : rightData)!;
+  const diff = diffCols[side].has(col);
+  return getColumnStore(data).effectiveColumn(col, {
+    diff, movAvg: diff ? undefined : movAvgCols[side].get(col),
+    scale: getScale(side, col), offset: getOffset(side, col),
+  });
 }
 
 // ---- Virtual rendering ----
@@ -396,8 +460,16 @@ function renderBody(side: Side): void {
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
   const end = Math.min(totalRows - 1, Math.ceil((scrollTop + clientHeight) / ROW_HEIGHT) + BUFFER);
 
+  // Read layout before the body is torn down below.
+  const firstTh = document.querySelector<HTMLElement>(`#${side}-header-row th[data-col-index="1"]`);
+  const [c0, c1] = visibleColumns(pane, firstTh, colWidths[side], colCount);
+
   const tbody = document.getElementById(`${side}-data-body`)!;
   tbody.innerHTML = '';
+  if (!tbody.dataset.clickBound) {
+    tbody.dataset.clickBound = '1';
+    tbody.addEventListener('click', e => onBodyClick(side, e));
+  }
 
   if (start > 0) {
     const tr = document.createElement('tr');
@@ -408,9 +480,22 @@ function renderBody(side: Side): void {
     tbody.appendChild(tr);
   }
 
+  // Per rendered column: equality keys for this side and its matched column.
+  const diffKeys = new Map<number, [(r: number) => number | string, (r: number) => number | string]>();
+  const keysFor = (j: number) => {
+    let k = diffKeys.get(j);
+    if (!k) {
+      const otherCol = side === 'left' ? columnMapping.get(j) : reverseMapping.get(j);
+      if (otherCol === undefined) return undefined;
+      k = [cellKeyFn(side, j), cellKeyFn(otherSide(side), otherCol)];
+      diffKeys.set(j, k);
+    }
+    return k;
+  };
+
   const frag = document.createDocumentFragment();
   for (let i = start; i <= end; i++) {
-    const row = data.rows[i];
+    const row = data.rows.row(i);
     const tr = document.createElement('tr');
     if (!row) {
       // This file has fewer rows than the other one: a blank filler row keeps
@@ -424,14 +509,13 @@ function renderBody(side: Side): void {
       continue;
     }
     tr.dataset.rowIndex = String(i);
-    tr.addEventListener('click', () => navigateToRow(i));
 
     const tdNum = document.createElement('td');
     tdNum.textContent = String(i + 1);
     tdNum.className = 'row-num-cell align-right';
     tr.appendChild(tdNum);
 
-    for (let j = 0; j < row.length; j++) {
+    const addCell = (j: number): void => {
       const td = document.createElement('td');
       const inDiff = diffCols[side].has(j);
       const movAvgWin = movAvgCols[side].get(j);
@@ -455,19 +539,19 @@ function renderBody(side: Side): void {
         displayVal = toHexDisplay(displayVal);
         extraCls += ' hex-col';
       }
-      const otherCol = side === 'left' ? columnMapping.get(j) : reverseMapping.get(j);
-      if (otherCol !== undefined && i < commonRowCount) {
-        const otherVal = getCellValue(otherSide(side), i, otherCol);
-        if (displayVal !== otherVal) extraCls += ' value-diff';
-      }
+      const keys = i < commonRowCount ? keysFor(j) : undefined;
+      if (keys && keys[0](i) !== keys[1](i)) extraCls += ' value-diff';
       td.textContent = displayVal;
       td.dataset.colIndex = String(j);
       td.dataset.side = side;
       td.className = (j === 0 ? 'align-left col-first' : 'align-left') + extraCls;
       applyFixedWidth(td, side, j);
-      td.addEventListener('click', e => handleColumnClick(side, j, e as MouseEvent));
       tr.appendChild(td);
-    }
+    };
+    if (colCount > 0) addCell(0);
+    if (c0 > 1) tr.appendChild(spacerCell(c0 - 1));
+    for (let j = c0; j <= c1; j++) addCell(j);
+    if (c1 < colCount - 1) tr.appendChild(spacerCell(colCount - 1 - c1));
     frag.appendChild(tr);
   }
   tbody.appendChild(frag);
@@ -483,6 +567,16 @@ function renderBody(side: Side): void {
 
   applyHighlight(side);
   applyRowHighlight(side);
+}
+
+// One delegated listener per body instead of two per cell: cell (column)
+// first, then row, the order the per-element listeners fired in.
+function onBodyClick(side: Side, e: MouseEvent): void {
+  const target = e.target as HTMLElement;
+  const td = target.closest<HTMLElement>('td[data-col-index]');
+  if (td) handleColumnClick(side, parseInt(td.dataset.colIndex!, 10), e);
+  const tr = target.closest<HTMLElement>('tr[data-row-index]');
+  if (tr) navigateToRow(parseInt(tr.dataset.rowIndex!, 10));
 }
 
 // ---- Column selection ----
@@ -539,15 +633,16 @@ function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void 
 function applyHighlight(side: Side): void {
   const data = side === 'left' ? leftData : rightData;
   if (!data) return;
-  for (let i = 0; i < data.headers.length; i++) {
-    const cells = document.querySelectorAll<HTMLElement>(`#${side}-table [data-col-index="${i}"]`);
+  // One pass over the cells; a query per column rescanned the table once for
+  // every column.
+  const n = data.headers.length;
+  document.querySelectorAll<HTMLElement>(`#${side}-table [data-col-index]`).forEach(cell => {
+    const i = Number(cell.dataset.colIndex);
+    if (!(i >= 0 && i < n)) return;
     const isXAxis = i === xAxisCol[side];
-    const isSelected = selectedCols[side].has(i) && !isXAxis;
-    cells.forEach(cell => {
-      cell.classList.toggle('selected', isSelected);
-      cell.classList.toggle('x-axis', isXAxis);
-    });
-  }
+    cell.classList.toggle('selected', selectedCols[side].has(i) && !isXAxis);
+    cell.classList.toggle('x-axis', isXAxis);
+  });
 }
 
 function applyDiffHeader(side: Side, colIdx: number): void {
@@ -689,7 +784,7 @@ function commitSO(kind: SOKind, side: Side, col: number, input: HTMLInputElement
   updateToolbar();
 }
 
-function buildSORow(kind: SOKind, side: Side, label: string, data: ParsedFile): void {
+function buildSORow(kind: SOKind, side: Side, label: string, data: TableFile): void {
   const tr = document.getElementById(`${side}-${kind}-row`)!;
   tr.innerHTML = '';
   tr.classList.toggle('hidden', !(kind === 'scale' ? scaleRowVisible : offsetRowVisible));
@@ -900,12 +995,13 @@ function navigateToRow(rowIdx: number): void {
 function gotoNextDiff(side: Side, colIdx: number): void {
   const otherCol = getMappedCol(side, colIdx);
   if (otherCol === undefined) return;
+  const mine = cellKeyFn(side, colIdx), theirs = cellKeyFn(otherSide(side), otherCol);
   const start = (crosshairRowIdx !== null ? crosshairRowIdx + 1 : 0);
   for (let pass = 0; pass < 2; pass++) {
     const from = pass === 0 ? start : 0;
     const to = pass === 0 ? commonRowCount : Math.min(crosshairRowIdx ?? 0, commonRowCount);
     for (let i = from; i < to; i++) {
-      if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
+      if (mine(i) !== theirs(i)) {
         navigateToRow(i);
         return;
       }
@@ -916,12 +1012,13 @@ function gotoNextDiff(side: Side, colIdx: number): void {
 function gotoPrevDiff(side: Side, colIdx: number): void {
   const otherCol = getMappedCol(side, colIdx);
   if (otherCol === undefined) return;
+  const mine = cellKeyFn(side, colIdx), theirs = cellKeyFn(otherSide(side), otherCol);
   const start = Math.min(crosshairRowIdx !== null ? crosshairRowIdx - 1 : commonRowCount - 1, commonRowCount - 1);
   for (let pass = 0; pass < 2; pass++) {
     const from = pass === 0 ? start : commonRowCount - 1;
     const to = pass === 0 ? -1 : (crosshairRowIdx ?? commonRowCount);
     for (let i = from; i > to; i--) {
-      if (getCellValue(side, i, colIdx) !== getCellValue(otherSide(side), i, otherCol)) {
+      if (mine(i) !== theirs(i)) {
         navigateToRow(i);
         return;
       }
@@ -934,9 +1031,9 @@ function gotoMaxDiff(side: Side, colIdx: number): void {
   if (otherCol === undefined) return;
   let maxDiff = -1;
   let maxRow = -1;
+  const A = effectiveColumn(side, colIdx), B = effectiveColumn(otherSide(side), otherCol);
   for (let i = 0; i < commonRowCount; i++) {
-    const lv = parseFloat(getCellValue(side, i, colIdx));
-    const rv = parseFloat(getCellValue(otherSide(side), i, otherCol));
+    const lv = A[i], rv = B[i];
     if (!isFinite(lv) || !isFinite(rv)) continue;
     const d = Math.abs(lv - rv);
     if (d > maxDiff) { maxDiff = d; maxRow = i; }
@@ -952,9 +1049,10 @@ function gotoNaN(side: Side, colIdx: number, dir: 1 | -1): void {
   const start = crosshairRowIdx !== null
     ? crosshairRowIdx + dir
     : (dir === 1 ? 0 : n - 1);
+  const vals = effectiveColumn(side, colIdx);
   for (let k = 0; k < n; k++) {
     const i = ((start + dir * k) % n + n) % n;
-    if (!isFinite(parseFloat(getCellValue(side, i, colIdx)))) {
+    if (!isFinite(vals[i])) {
       navigateToRow(i);
       return;
     }
@@ -1081,7 +1179,7 @@ function measureTextWidth(text: string, font: string): number {
 
 // Fixed pixel width per column from header + sampled values, so columns don't
 // jitter as the virtual scroller renders different rows.
-function computeColumnWidths(data: ParsedFile): number[] {
+function computeColumnWidths(data: TableFile): number[] {
   const cs = getComputedStyle(document.body);
   const normalFont = `${cs.fontSize} ${cs.fontFamily}`;
   const boldFont = `bold ${cs.fontSize} ${cs.fontFamily}`;
@@ -1102,7 +1200,7 @@ function computeColumnWidths(data: ParsedFile): number[] {
     const headerW = Math.ceil(Math.max(headerWBold, headerWNormal)) + COL_PAD;
     let dataMax = 0;
     for (const i of sampleIdx) {
-      const v = data.rows[i]?.[col];
+      const v = data.rows.row(i)?.[col];
       if (v) { const w = measureTextWidth(v, normalFont); if (w > dataMax) dataMax = w; }
     }
     const dataW = Math.min(COL_MAX_W, Math.ceil(dataMax) + COL_PAD);
@@ -1117,7 +1215,7 @@ function applyFixedWidth(el: HTMLElement, side: Side, colIdx: number): void {
   el.style.width = el.style.minWidth = el.style.maxWidth = `${w}px`;
 }
 
-function initPane(side: Side, data: ParsedFile): void {
+function initPane(side: Side, data: TableFile): void {
   // The floor also has to fit the "Offset" label in the scale/offset rows.
   const rowNumPx = Math.max(String(displayRowCount).length * PX_PER_CHAR + PADDING, 54);
   const table = document.getElementById(`${side}-table`)!;
@@ -1127,11 +1225,11 @@ function initPane(side: Side, data: ParsedFile): void {
   const s = Math.min(100, n);
   let maxLen = data.headers[0]?.length ?? 0;
   for (let i = 0; i < s; i++) {
-    const v = data.rows[i]?.[0];
+    const v = data.rows.row(i)?.[0];
     if (v && v.length > maxLen) maxLen = v.length;
   }
   for (let i = Math.max(s, n - 100); i < n; i++) {
-    const v = data.rows[i]?.[0];
+    const v = data.rows.row(i)?.[0];
     if (v && v.length > maxLen) maxLen = v.length;
   }
   // colWidths[side] is precomputed (and matched-pair-equalized) in commitCompareData.
@@ -1244,9 +1342,10 @@ function canSyncTime(side: Side, colIdx: number): boolean {
 // transforms applied), sorted by time for interpolation.
 function timeSeries(side: Side, colIdx: number): { t: number[]; v: number[] } {
   const pts: Array<[number, number]> = [];
-  for (let i = 0; i < sideRowCount(side); i++) {
-    const t = parseFloat(getCellValue(side, i, xAxisCol[side]));
-    const v = parseFloat(getCellValue(side, i, colIdx));
+  const T = effectiveColumn(side, xAxisCol[side]), V = effectiveColumn(side, colIdx);
+  for (let i = 0; i < T.length; i++) {
+    const t = T[i];
+    const v = V[i];
     if (isFinite(t) && isFinite(v)) pts.push([t, v]);
   }
   pts.sort((a, b) => a[0] - b[0]);
@@ -1357,7 +1456,8 @@ function syncTimeOffset(side: Side, colIdx: number): void {
   if (win) {
     if (win.isRowIndex) {
       const n = sideRowCount(other);
-      const rowTime = (r: number) => parseFloat(getCellValue(other, Math.max(0, Math.min(n - 1, Math.round(r) - 1)), xAxisCol[other]));
+      const T = effectiveColumn(other, xAxisCol[other]);
+      const rowTime = (r: number) => T[Math.max(0, Math.min(n - 1, Math.round(r) - 1))];
       const ta = rowTime(win.min), tb = rowTime(win.max);
       if (isFinite(ta) && isFinite(tb)) { a = Math.min(ta, tb); b = Math.max(ta, tb); }
     } else {
@@ -1583,8 +1683,9 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
   setItemVisible('ctx-stats', hasStats);
   if (hasStats) {
     let maxV = -Infinity, minV = Infinity, sum = 0, count = 0, nanCount = 0;
-    for (let i = 0; i < sideRowCount(side); i++) {
-      const v = parseFloat(getCellValue(side, i, colIndex));
+    const vals = effectiveColumn(side, colIndex);
+    for (let i = 0; i < vals.length; i++) {
+      const v = vals[i];
       if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
       else nanCount++;
     }
@@ -1623,7 +1724,7 @@ function showContextMenu(side: Side, x: number, y: number, colIndex: number): vo
 // Each file is streamed as loadStart -> loadChunk* -> loadEnd (see
 // CompareViewProvider) to stay under the webview message size limit. Accumulate
 // each side's rows, then commit once BOTH sides finish for the same sequence.
-type SideAccum = { seq: number; meta: ParsedMeta; rows: string[][]; done: boolean };
+type SideAccum = { seq: number; table: TableBuilder; done: boolean };
 const compareAccum: { left: SideAccum | null; right: SideAccum | null } =
   { left: null, right: null };
 
@@ -1639,8 +1740,8 @@ function hideLoading(): void {
 function updateLoadingProgress(): void {
   const el = document.getElementById('loading-text');
   if (!el) return;
-  const loaded = (compareAccum.left?.rows.length ?? 0) + (compareAccum.right?.rows.length ?? 0);
-  const total = (compareAccum.left?.meta.totalRows ?? 0) + (compareAccum.right?.meta.totalRows ?? 0);
+  const loaded = (compareAccum.left?.table.loaded ?? 0) + (compareAccum.right?.table.loaded ?? 0);
+  const total = (compareAccum.left?.table.meta.totalRows ?? 0) + (compareAccum.right?.table.meta.totalRows ?? 0);
   el.textContent = total > 0
     ? `로딩 중... ${loaded.toLocaleString()} / ${total.toLocaleString()} 행`
     : '로딩 중...';
@@ -1650,12 +1751,12 @@ window.addEventListener('message', (event: MessageEvent) => {
   const msg = event.data as ExtensionToWebviewMessage;
 
   if (msg.type === 'loadStart' && (msg.channel === 'left' || msg.channel === 'right')) {
-    compareAccum[msg.channel] = { seq: msg.seq, meta: msg.meta, rows: [], done: false };
+    compareAccum[msg.channel] = { seq: msg.seq, table: new TableBuilder(msg.meta), done: false };
     showLoading();
   } else if (msg.type === 'loadChunk' && (msg.channel === 'left' || msg.channel === 'right')) {
     const a = compareAccum[msg.channel];
     if (a && a.seq === msg.seq) {
-      for (let i = 0; i < msg.rows.length; i++) a.rows.push(msg.rows[i]);
+      a.table.add(msg);
       updateLoadingProgress();
     }
   } else if (msg.type === 'loadEnd' && (msg.channel === 'left' || msg.channel === 'right')) {
@@ -1665,8 +1766,8 @@ window.addEventListener('message', (event: MessageEvent) => {
       const l = compareAccum.left;
       const r = compareAccum.right;
       if (l && r && l.done && r.done && l.seq === r.seq) {
-        const left: ParsedFile = { ...l.meta, rows: l.rows };
-        const right: ParsedFile = { ...r.meta, rows: r.rows };
+        const left = l.table.finish();
+        const right = r.table.finish();
         compareAccum.left = null;
         compareAccum.right = null;
         commitCompareData(left, right);
@@ -1735,7 +1836,7 @@ function swapSides(): void {
   updateToolbar();
 }
 
-function commitCompareData(left: ParsedFile, right: ParsedFile): void {
+function commitCompareData(left: TableFile, right: TableFile): void {
   {
     leftData = left;
     rightData = right;
@@ -1892,8 +1993,8 @@ function showGraph(): void {
   resetZoom();
   resetCrosshairs();
   renderGraph(
-    leftData.headers, getEffectiveRows('left'), Array.from(selectedCols.left), xAxisCol.left,
-    { headers: rightData.headers, rows: getEffectiveRows('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
+    leftData.headers, graphSource('left'), Array.from(selectedCols.left), xAxisCol.left,
+    { headers: rightData.headers, src: graphSource('right'), selectedCols: Array.from(selectedCols.right), xAxisCol: xAxisCol.right, xAxisIsOriginal: isXAxisOriginal('right') },
     isXAxisOriginal('left')
   );
   syncViewport();

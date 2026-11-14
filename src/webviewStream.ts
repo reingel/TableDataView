@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { LoadChannel, ParsedMeta } from './types';
-import { detectDelimiter, splitLine, detectHeader } from './csvParser';
+import { LoadChannel, ParsedMeta, TextCells } from './types';
+import { detectDelimiter, splitLine, detectHeader, cellNumber } from './csvSplit';
 
 // Target cells per chunk. ~2M cells ≈ ~18 MiB serialized, comfortably under any
 // webview message size limit. Chunk size is computed from the column count so a
@@ -65,20 +65,30 @@ export async function streamParseAndSend(
   panel.webview.postMessage({ type: 'loadStart', channel, seq, meta });
 
   const chunkRows = Math.max(1, Math.floor(CELLS_PER_CHUNK / Math.max(1, colCount)));
-  let batch: string[][] = [];
+  let batchLines: string[] = [];
+  let values = new Float64Array(chunkRows * colCount);
+  let texts: TextCells = { rows: [], cols: [], vals: [] };
+  const send = () => {
+    panel.webview.postMessage({ type: 'loadChunk', channel, seq, lines: batchLines, values, stride: chunkRows, texts });
+    batchLines = [];
+    values = new Float64Array(chunkRows * colCount);
+    texts = { rows: [], cols: [], vals: [] };
+  };
   for (let i = dataStart; i < lines.length; i++) {
+    const r = batchLines.length;
     const cells = splitLine(lines[i], delimiter);
-    while (cells.length < colCount) cells.push('');
-    if (cells.length > colCount) cells.length = colCount;
-    batch.push(cells);
-    if (batch.length >= chunkRows) {
-      panel.webview.postMessage({ type: 'loadChunk', channel, seq, rows: batch });
-      batch = [];
+    for (let c = 0; c < colCount; c++) {
+      const cell = cells[c] ?? '';
+      const num = cellNumber(cell);
+      values[c * chunkRows + r] = num.value;
+      if (num.isText) { texts.rows.push(r); texts.cols.push(c); texts.vals.push(cell); }
+    }
+    batchLines.push(lines[i]);
+    if (batchLines.length >= chunkRows) {
+      send();
       await yieldToEventLoop();
     }
   }
-  if (batch.length > 0) {
-    panel.webview.postMessage({ type: 'loadChunk', channel, seq, rows: batch });
-  }
+  if (batchLines.length > 0) send();
   panel.webview.postMessage({ type: 'loadEnd', channel, seq });
 }

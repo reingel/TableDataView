@@ -1,16 +1,18 @@
 import { initGraphSave } from './graphSave';
-import { ExtensionToWebviewMessage, ParsedFile, ParsedMeta } from '../types';
-import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, toggleScaleOffsetRows, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, hasScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
+import { ExtensionToWebviewMessage } from '../types';
+import { TableBuilder, TableFile } from './tableData';
+import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, getScale, getOffset, toggleScaleOffsetRows, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, hasScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
 import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
-import { renderGraph, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
+import { getColumnStore } from './columnCache';
+import { renderGraph, GraphSource, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
 };
 
 const vscode = acquireVsCodeApi();
-let currentData: ParsedFile | null = null;
+let currentData: TableFile | null = null;
 
 type ReloadState = {
   scrollTop: number; scrollLeft: number;
@@ -63,7 +65,7 @@ function updateToolbar(): void {
   updateHeaderPanelSelection();
   const graphContainer = document.getElementById('graph-container')!;
   if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
-    renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol(), undefined, isXAxisOriginal());
+    renderGraph(currentData.headers, graphSource(currentData), selected, getXAxisCol(), undefined, isXAxisOriginal());
     if (isFFTPaneVisible()) renderFFTPaneFromGraph();
   }
 }
@@ -89,25 +91,42 @@ function getEffectiveValue(rowIdx: number, colIdx: number): string {
   if (isDiff(colIdx)) val = getDiffValue(rowIdx, colIdx);
   else {
     const ws = getMovAvgWindowSize(colIdx);
-    val = ws !== undefined ? getMovAvgValue(rowIdx, colIdx, ws) : currentData.rows[rowIdx][colIdx];
+    val = ws !== undefined ? getMovAvgValue(rowIdx, colIdx, ws) : currentData.rows.cell(rowIdx, colIdx);
   }
   return applyScaleOffset(colIdx, val);
 }
 
-function getEffectiveRows(): string[][] {
-  if (!currentData) return [];
-  if (currentData.rows.length === 0) return [];
-  return currentData.rows.map((row, i) =>
-    row.map((val, j) => {
-      let v: string;
-      if (isDiff(j)) v = getDiffValue(i, j);
-      else {
-        const ws = getMovAvgWindowSize(j);
-        v = ws !== undefined ? getMovAvgValue(i, j, ws) : val;
-      }
-      return applyScaleOffset(j, v);
-    })
-  );
+// What the graph plots: only the columns it asks for, from the per-file
+// numeric cache, with this view's diff / moving average / scale+offset applied.
+function graphSource(data: TableFile): GraphSource {
+  return { rowCount: data.rows.length, column: col => effectiveColumn(data, col), cell: getEffectiveValue };
+}
+
+// A cell's effective value for equality checks without building its display
+// string: its number, or its text when it has no number (blank -> ''). A text
+// cell (e.g. a date, see cellNumber) of an untransformed column compares as
+// text; once transformed the table shows its number, so that is compared.
+// Numbers compare by value, so "1.50" and "1.5" count as the same.
+function cellKeyFn(data: TableFile, col: number): (row: number) => number | string {
+  const vals = effectiveColumn(data, col);
+  const transformed = isDiff(col) || getMovAvgWindowSize(col) !== undefined || isScaled(col);
+  return row => {
+    const t = data.rows.text(row, col);
+    if (t !== undefined && !transformed) return t;
+    const v = vals[row];
+    return isFinite(v) ? v : (t ?? '');
+  };
+}
+
+// A column's effective values (diff / moving average / scale+offset applied)
+// as numbers, cached per file. Whole-column work (stats, go to max/min/NaN,
+// find change) reads this instead of formatting and re-parsing every cell.
+function effectiveColumn(data: TableFile, col: number): Float64Array {
+  const diff = isDiff(col);
+  return getColumnStore(data).effectiveColumn(col, {
+    diff, movAvg: diff ? undefined : getMovAvgWindowSize(col),
+    scale: getScale(col), offset: getOffset(col),
+  });
 }
 
 // The first column click in the table or Header panel opens the graph for it, so a fresh view
@@ -148,14 +167,14 @@ function handleShowGraph(): void {
   if (selected.length === 0) return;
   resetZoom();
   resetCrosshairs();
-  renderGraph(currentData.headers, getEffectiveRows(), selected, getXAxisCol(), undefined, isXAxisOriginal());
+  renderGraph(currentData.headers, graphSource(currentData), selected, getXAxisCol(), undefined, isXAxisOriginal());
   syncViewport();
   document.getElementById('btn-show-graph')!.classList.add('active');
 }
 
 // The file is streamed as loadStart -> loadChunk* -> loadEnd. Accumulate rows
 // until loadEnd, then render in one pass.
-let loadAccum: { seq: number; meta: ParsedMeta; rows: string[][] } | null = null;
+let loadAccum: { seq: number; table: TableBuilder } | null = null;
 
 function setLoadingText(loaded: number, total: number): void {
   const el = document.getElementById('loading-text');
@@ -178,16 +197,16 @@ window.addEventListener('message', (event: MessageEvent) => {
   const msg = event.data as ExtensionToWebviewMessage;
 
   if (msg.type === 'loadStart' && msg.channel === 'single') {
-    loadAccum = { seq: msg.seq, meta: msg.meta, rows: [] };
+    loadAccum = { seq: msg.seq, table: new TableBuilder(msg.meta) };
     showLoading(msg.meta.totalRows);
   } else if (msg.type === 'loadChunk' && msg.channel === 'single') {
     if (loadAccum && loadAccum.seq === msg.seq) {
-      for (let i = 0; i < msg.rows.length; i++) loadAccum.rows.push(msg.rows[i]);
-      setLoadingText(loadAccum.rows.length, loadAccum.meta.totalRows);
+      loadAccum.table.add(msg);
+      setLoadingText(loadAccum.table.loaded, loadAccum.table.meta.totalRows);
     }
   } else if (msg.type === 'loadEnd' && msg.channel === 'single') {
     if (loadAccum && loadAccum.seq === msg.seq) {
-      const payload: ParsedFile = { ...loadAccum.meta, rows: loadAccum.rows };
+      const payload = loadAccum.table.finish();
       loadAccum = null;
       onLoadData(payload);
       hideLoading();
@@ -199,7 +218,7 @@ window.addEventListener('message', (event: MessageEvent) => {
   }
 });
 
-function onLoadData(payload: ParsedFile): void {
+function onLoadData(payload: TableFile): void {
   currentData = payload;
 
   document.getElementById('file-name')!.textContent = payload.fileName;
@@ -226,9 +245,10 @@ function escapeHtml(str: string): string {
 function findChange(col: number, startRow: number, dir: 1 | -1): void {
   if (!currentData || col < 0 || startRow < 0) return;
   const n = currentData.rows.length;
-  const refVal = getEffectiveValue(startRow, col);
+  const key = cellKeyFn(currentData, col);
+  const ref = key(startRow);
   for (let i = startRow + dir; i >= 0 && i < n; i += dir) {
-    if (getEffectiveValue(i, col) !== refVal) {
+    if (key(i) !== ref) {
       navigateToRow(i);
       return;
     }
@@ -453,8 +473,9 @@ function showColumnContextMenu(clientX: number, clientY: number, colIndex: numbe
   let colStats: { max: number; min: number; mean: number; nanCount: number } | null = null;
   if (colIndex >= 0 && currentData) {
     let maxV = -Infinity, minV = Infinity, sum = 0, count = 0, nanCount = 0;
-    for (let i = 0; i < currentData.rows.length; i++) {
-      const v = parseFloat(getEffectiveValue(i, colIndex));
+    const vals = effectiveColumn(currentData, colIndex);
+    for (let i = 0; i < vals.length; i++) {
+      const v = vals[i];
       if (isFinite(v)) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); sum += v; count++; }
       else nanCount++;
     }
@@ -664,8 +685,9 @@ document.addEventListener('DOMContentLoaded', () => {
     gotoMax: (col) => {
       if (!currentData) return;
       let maxVal = -Infinity, maxRow = -1;
-      for (let i = 0; i < currentData.rows.length; i++) {
-        const v = parseFloat(getEffectiveValue(i, col));
+      const vals = effectiveColumn(currentData, col);
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
         if (isFinite(v) && v > maxVal) { maxVal = v; maxRow = i; }
       }
       if (maxRow >= 0) navigateToRow(maxRow);
@@ -673,8 +695,9 @@ document.addEventListener('DOMContentLoaded', () => {
     gotoMin: (col) => {
       if (!currentData) return;
       let minVal = Infinity, minRow = -1;
-      for (let i = 0; i < currentData.rows.length; i++) {
-        const v = parseFloat(getEffectiveValue(i, col));
+      const vals = effectiveColumn(currentData, col);
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
         if (isFinite(v) && v < minVal) { minVal = v; minRow = i; }
       }
       if (minRow >= 0) navigateToRow(minRow);
@@ -685,9 +708,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (n === 0) return;
       // Wrap around so repeated invocations walk through every gap in the column.
       const from = startRow >= 0 ? startRow + 1 : 0;
+      const vals = effectiveColumn(currentData, col);
       for (let k = 0; k < n; k++) {
         const i = (from + k) % n;
-        if (!isFinite(parseFloat(getEffectiveValue(i, col)))) {
+        if (!isFinite(vals[i])) {
           navigateToRow(i);
           return;
         }
@@ -698,9 +722,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const n = currentData.rows.length;
       if (n === 0) return;
       const from = startRow >= 0 ? startRow - 1 : n - 1;
+      const vals = effectiveColumn(currentData, col);
       for (let k = 0; k < n; k++) {
         const i = ((from - k) % n + n) % n;
-        if (!isFinite(parseFloat(getEffectiveValue(i, col)))) {
+        if (!isFinite(vals[i])) {
           navigateToRow(i);
           return;
         }
