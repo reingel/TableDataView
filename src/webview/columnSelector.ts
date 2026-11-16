@@ -47,7 +47,8 @@ export function init(colCount: number, onChange: () => void, defaultXAxis: numbe
   selectedColumns.clear();
   defaultXAxisCol = defaultXAxis;
   xAxisCol = defaultXAxis;
-  if (colCount > 0) selectedColumns.add(0);
+  // Clicks toggle columns, so start with nothing but the x-axis selected
+  // (a preselected column would stay until clicked off).
   if (xAxisCol >= 0) selectedColumns.add(xAxisCol);
   lastClickedIndex = null;
 }
@@ -85,16 +86,17 @@ export function resetXAxis(): void {
   onSelectionChange?.();
 }
 
+// A click toggles the column in / out of the selection, so building up a
+// multi-column selection needs no modifier key; Shift+click adds the range
+// from the last clicked column.
 export function handleColumnClick(colIndex: number, event: MouseEvent): void {
   if (event.shiftKey && lastClickedIndex !== null) {
     const lo = Math.min(lastClickedIndex, colIndex);
     const hi = Math.max(lastClickedIndex, colIndex);
     for (let i = lo; i <= hi; i++) selectedColumns.add(i);
-  } else if (event.ctrlKey || event.metaKey) {
-    if (selectedColumns.has(colIndex)) selectedColumns.delete(colIndex);
-    else selectedColumns.add(colIndex);
+  } else if (selectedColumns.has(colIndex)) {
+    selectedColumns.delete(colIndex);
   } else {
-    selectedColumns.clear();
     selectedColumns.add(colIndex);
   }
   if (xAxisCol >= 0) selectedColumns.add(xAxisCol);
@@ -127,7 +129,6 @@ export function restoreSelection(cols: number[], xAxis: number): void {
 export function reset(): void {
   selectedColumns.clear();
   xAxisCol = defaultXAxisCol;
-  if (totalColumns > 0) selectedColumns.add(0);
   if (xAxisCol >= 0) selectedColumns.add(xAxisCol);
   lastClickedIndex = null;
   applyHighlight();

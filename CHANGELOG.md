@@ -1,6 +1,7 @@
 # Changelog
 
 ## 3.0.0
+- Column selection: a click (table or Header panel) toggles the column instead of replacing the selection; Shift+click adds a range. A new view starts with only the x-axis selected
 - Large files: much faster response to column clicks, graph zoom/pan and table scrolling (numeric column cache, graph decimation, only visible columns rendered)
 - Large files: about half the memory; numbers are sent to the view as binary columns and only the rows on screen are split into cells
 - Large files: column context menu (stats), Go to max/min/NaN, Find next change and compare diff stats / Sync work on cached numeric columns

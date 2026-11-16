@@ -583,15 +583,6 @@ function onBodyClick(side: Side, e: MouseEvent): void {
 
 let lastClickedCol: Record<Side, number | null> = { left: null, right: null };
 
-function selectSingleColumn(side: Side, colIdx: number): void {
-  const other = otherSide(side);
-  const mappedIdx = getMappedCol(side, colIdx);
-  selectedCols.left.clear();
-  selectedCols.right.clear();
-  selectedCols[side].add(colIdx);
-  if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
-}
-
 function finishColumnSelection(side: Side, colIdx: number): void {
   // Always keep x-axis col selected (skip the sequence-number sentinel)
   if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
@@ -603,6 +594,9 @@ function finishColumnSelection(side: Side, colIdx: number): void {
   updateToolbar();
 }
 
+// A click toggles the column (and its matched column on the other side) in /
+// out of the selection, so building up a multi-column selection needs no
+// modifier key; Shift+click adds the range from the last clicked column.
 function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void {
   const other = otherSide(side);
   const mappedIdx = getMappedCol(side, colIdx);
@@ -615,16 +609,12 @@ function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void 
       const mi = getMappedCol(side, i);
       if (mi !== undefined) selectedCols[other].add(mi);
     }
-  } else if (event.ctrlKey || event.metaKey) {
-    if (selectedCols[side].has(colIdx)) {
-      selectedCols[side].delete(colIdx);
-      if (mappedIdx !== undefined) selectedCols[other].delete(mappedIdx);
-    } else {
-      selectedCols[side].add(colIdx);
-      if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
-    }
+  } else if (selectedCols[side].has(colIdx)) {
+    selectedCols[side].delete(colIdx);
+    if (mappedIdx !== undefined) selectedCols[other].delete(mappedIdx);
   } else {
-    selectSingleColumn(side, colIdx);
+    selectedCols[side].add(colIdx);
+    if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
   }
 
   finishColumnSelection(side, colIdx);
@@ -1280,10 +1270,10 @@ function initPane(side: Side, data: TableFile): void {
   buildSORow('offset', side, 'Offset', data);
   for (let i = 0; i < colCount; i++) refreshSOCol(side, i);
 
-  // Initial column selection: col 0. The x-axis defaults to the row sequence
-  // unless the first column looks like an index/time axis.
+  // Initial selection: only the x-axis (clicks toggle columns, so a
+  // preselected column would stay until clicked off). The x-axis defaults to
+  // the row sequence unless the first column looks like an index/time axis.
   selectedCols[side].clear();
-  selectedCols[side].add(0);
   defaultXAxisCol[side] = detectDefaultXAxis(data.headers, data.rows);
   xAxisCol[side] = defaultXAxisCol[side];
   if (xAxisCol[side] >= 0) selectedCols[side].add(xAxisCol[side]);
