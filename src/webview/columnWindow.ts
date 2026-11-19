@@ -16,7 +16,11 @@ export function visibleColumns(
   if (!firstTh || widths.length < colCount) return [1, colCount - 1];
   const left = container.scrollLeft;
   const right = left + container.clientWidth;
-  let x = firstTh.offsetLeft;
+  // Position in the container's scroll coordinates. Not offsetLeft: that is
+  // relative to the offsetParent (the page body here), which put the compare
+  // view's right pane ~700 px off and rendered the wrong columns.
+  let x = firstTh.getBoundingClientRect().left - container.getBoundingClientRect().left
+    + container.clientLeft + left;
   let first = -1, last = colCount - 1;
   for (let c = 1; c < colCount; c++) {
     if (x >= right) { last = c - 1; break; }

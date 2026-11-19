@@ -1,7 +1,15 @@
 # Changelog
 
-## 3.0.0
+## 3.2.0
+- Alt/Option+click selects only that column; Esc clears the selection (x-axis stays)
+- Fix: Shift+click range could start from column 0 after clicking a cell of the x-axis (time) column
+- Graph is empty, instead of plotting the x-axis against itself, when only the x-axis is selected
+- Fix: compare view right pane showed empty cells after scrolling horizontally
+
+## 3.1.0
 - Column selection: a click (table or Header panel) toggles the column instead of replacing the selection; Shift+click adds a range. A new view starts with only the x-axis selected
+
+## 3.0.0
 - Large files: much faster response to column clicks, graph zoom/pan and table scrolling (numeric column cache, graph decimation, only visible columns rendered)
 - Large files: about half the memory; numbers are sent to the view as binary columns and only the rows on screen are split into cells
 - Large files: column context menu (stats), Go to max/min/NaN, Find next change and compare diff stats / Sync work on cached numeric columns

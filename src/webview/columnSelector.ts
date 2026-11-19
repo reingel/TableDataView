@@ -87,10 +87,13 @@ export function resetXAxis(): void {
 }
 
 // A click toggles the column in / out of the selection, so building up a
-// multi-column selection needs no modifier key; Shift+click adds the range
-// from the last clicked column.
+// multi-column selection needs no modifier key; Alt(Option)+click selects
+// only that column; Shift+click adds the range from the last clicked column.
 export function handleColumnClick(colIndex: number, event: MouseEvent): void {
-  if (event.shiftKey && lastClickedIndex !== null) {
+  if (event.altKey) {
+    selectedColumns.clear();
+    selectedColumns.add(colIndex);
+  } else if (event.shiftKey && lastClickedIndex !== null) {
     const lo = Math.min(lastClickedIndex, colIndex);
     const hi = Math.max(lastClickedIndex, colIndex);
     for (let i = lo; i <= hi; i++) selectedColumns.add(i);
@@ -100,9 +103,39 @@ export function handleColumnClick(colIndex: number, event: MouseEvent): void {
     selectedColumns.add(colIndex);
   }
   if (xAxisCol >= 0) selectedColumns.add(xAxisCol);
-  lastClickedIndex = colIndex;
+  // The x-axis can't be toggled, so clicking it (e.g. a time cell to jump to
+  // a row) must not move the Shift+click anchor either: that made the next
+  // Shift+click select everything from column 0.
+  if (colIndex !== xAxisCol) lastClickedIndex = colIndex;
   applyHighlight();
   onSelectionChange?.();
+}
+
+// Everything off except the x-axis (Esc).
+export function clearSelection(): void {
+  selectedColumns.clear();
+  if (xAxisCol >= 0) selectedColumns.add(xAxisCol);
+  lastClickedIndex = null;
+  applyHighlight();
+  onSelectionChange?.();
+}
+
+const POPUPS = ['context-menu', 'ctx-match-list', 'graph-save-popover', 'col-search'];
+
+// Esc clears the column selection, unless it is closing a popup or cancelling
+// an edit. Those handlers listen in the bubble phase and hide their popup, so
+// this listens in the capture phase to still see it open.
+export function onSelectionEscape(clear: () => void): void {
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const tag = (document.activeElement as HTMLElement | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    const popupOpen = POPUPS.some(id => {
+      const el = document.getElementById(id);
+      return !!el && !el.classList.contains('hidden');
+    });
+    if (!popupOpen) clear();
+  }, true);
 }
 
 // One pass over the cells; a query per column rescanned the whole document

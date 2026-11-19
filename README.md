@@ -14,7 +14,9 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
 - First column is pinned (sticky) and stays visible while scrolling horizontally
 - Virtual scrolling (rows and columns) — stays responsive on large files (tested with 430,000 rows × 140 columns)
 - Click a column header, any cell, or a Header panel entry to toggle that column in / out of the selection — clicking another column adds it instead of replacing the selection
-  - **Shift+click** to add a range of columns
+  - **Alt/Option+click** to select only that column (clears the others)
+  - **Shift+click** to add a range of columns, starting from the last clicked column
+  - **Esc** clears the selection
   - The X-axis column always stays selected
 - **Mouse drag** to scroll the table in any direction
 - The first column click (in the table or the Header panel) opens the graph for that column automatically

@@ -752,14 +752,10 @@ const fftDragSelectPlugin = {
 
 function getDataCols(): number[] {
   if (!lastCols.includes(lastXAxisCol)) return lastCols;
-  const filtered = lastCols.filter(c => c !== lastXAxisCol);
-  if (filtered.length > 0) return filtered;
-  // In compare mode each side tracks selection independently, so an
-  // x-axis-only left selection just means "nothing real selected on this
-  // side" (e.g. a right-only column was picked) — don't synthesize a plot of
-  // the x-axis column against itself. Single-file view has no other side to
-  // fall back to, so keep plotting the lone selected column there.
-  return lastRightData ? [] : [lastXAxisCol];
+  // An x-axis-only selection means nothing to plot (Esc cleared it, or in
+  // compare mode only the other side has columns) — don't synthesize a plot of
+  // the x-axis column against itself.
+  return lastCols.filter(c => c !== lastXAxisCol);
 }
 
 function formatNum(val: number): string {

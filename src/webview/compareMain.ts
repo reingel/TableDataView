@@ -3,7 +3,7 @@ import { ExtensionToWebviewMessage } from '../types';
 import { TableBuilder, TableFile } from './tableData';
 import { getColumnStore } from './columnCache';
 import { renderGraph, GraphSource, getVisibleXWindow, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
-import { detectDefaultXAxis, SEQ_X } from './columnSelector';
+import { detectDefaultXAxis, SEQ_X, onSelectionEscape } from './columnSelector';
 import { visibleColumns, spacerCell } from './columnWindow';
 
 declare function acquireVsCodeApi(): { postMessage: (msg: object) => void };
@@ -588,7 +588,23 @@ function finishColumnSelection(side: Side, colIdx: number): void {
   if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
   if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
 
-  lastClickedCol[side] = colIdx;
+  // The x-axis can't be toggled, so clicking it (e.g. a time cell to jump to
+  // a row) must not move the Shift+click anchor either: that made the next
+  // Shift+click select everything from column 0.
+  if (colIdx !== xAxisCol[side]) lastClickedCol[side] = colIdx;
+  applyHighlight('left');
+  applyHighlight('right');
+  updateToolbar();
+}
+
+// Everything off on both sides except the x-axes (Esc).
+function clearSelection(): void {
+  selectedCols.left.clear();
+  selectedCols.right.clear();
+  if (xAxisCol.left >= 0) selectedCols.left.add(xAxisCol.left);
+  if (xAxisCol.right >= 0) selectedCols.right.add(xAxisCol.right);
+  lastClickedCol.left = null;
+  lastClickedCol.right = null;
   applyHighlight('left');
   applyHighlight('right');
   updateToolbar();
@@ -596,12 +612,18 @@ function finishColumnSelection(side: Side, colIdx: number): void {
 
 // A click toggles the column (and its matched column on the other side) in /
 // out of the selection, so building up a multi-column selection needs no
-// modifier key; Shift+click adds the range from the last clicked column.
+// modifier key; Alt(Option)+click selects only that column (and its match);
+// Shift+click adds the range from the last clicked column.
 function handleColumnClick(side: Side, colIdx: number, event: MouseEvent): void {
   const other = otherSide(side);
   const mappedIdx = getMappedCol(side, colIdx);
 
-  if (event.shiftKey && lastClickedCol[side] !== null) {
+  if (event.altKey) {
+    selectedCols.left.clear();
+    selectedCols.right.clear();
+    selectedCols[side].add(colIdx);
+    if (mappedIdx !== undefined) selectedCols[other].add(mappedIdx);
+  } else if (event.shiftKey && lastClickedCol[side] !== null) {
     const lo = Math.min(lastClickedCol[side]!, colIdx);
     const hi = Math.max(lastClickedCol[side]!, colIdx);
     for (let i = lo; i <= hi; i++) {
@@ -2288,6 +2310,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initColumnHover('right', rightPane);
   initColSearch();
   initHeaderPanel();
+  onSelectionEscape(clearSelection);
 
   // A user-initiated scroll (wheel or drag) re-enables left/right sync after a
   // column-search jump decoupled the panes.

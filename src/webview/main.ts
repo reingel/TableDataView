@@ -2,7 +2,7 @@ import { initGraphSave } from './graphSave';
 import { ExtensionToWebviewMessage } from '../types';
 import { TableBuilder, TableFile } from './tableData';
 import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, getScale, getOffset, toggleScaleOffsetRows, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, hasScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
-import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick } from './columnSelector';
+import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick, clearSelection, onSelectionEscape } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { getColumnStore } from './columnCache';
 import { renderGraph, GraphSource, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
@@ -64,7 +64,8 @@ function updateToolbar(): void {
   document.getElementById('btn-reset-all')!.classList.toggle('hidden', !hasCustomState);
   updateHeaderPanelSelection();
   const graphContainer = document.getElementById('graph-container')!;
-  if (!graphContainer.classList.contains('hidden') && currentData && selected.length > 0) {
+  // Also with nothing selected (Esc), so the graph empties instead of going stale.
+  if (!graphContainer.classList.contains('hidden') && currentData) {
     renderGraph(currentData.headers, graphSource(currentData), selected, getXAxisCol(), undefined, isXAxisOriginal());
     if (isFFTPaneVisible()) renderFFTPaneFromGraph();
   }
@@ -832,6 +833,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initColumnHover(document.getElementById('table-container')!);
   initColSearch();
   initHeaderPanel();
+  onSelectionEscape(clearSelection);
 
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 
