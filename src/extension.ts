@@ -36,6 +36,31 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('tableDataView.revealInExplorer', async (uri?: vscode.Uri) => {
+      // A table view tab passes its webview's own URI (webview-panel:…), not the
+      // data file's, so only a file URI is taken as is.
+      const target = uri instanceof vscode.Uri && uri.scheme === 'file' ? uri : provider.activeFileUri();
+      if (!target) {
+        vscode.window.showInformationMessage('TableDataView: no table view to reveal.');
+        return;
+      }
+      // The Explorer only shows files inside the open workspace folders.
+      if (!vscode.workspace.getWorkspaceFolder(target)) {
+        const pick = await vscode.window.showInformationMessage(
+          `TableDataView: ${path.basename(target.fsPath)} is outside the workspace, so the Explorer can't show it.`,
+          'Reveal in OS');
+        if (pick) await vscode.commands.executeCommand('revealFileInOS', target);
+        return;
+      }
+      // Run after the tab's context menu has closed and handed focus back to
+      // the webview; revealing right away lost the focus to it again.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await vscode.commands.executeCommand('workbench.view.explorer');
+      await vscode.commands.executeCommand('revealInExplorer', target);
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('tableDataView.compareFiles', async (clicked?: vscode.Uri, all?: vscode.Uri[]) => {
       const files = (all ?? (clicked ? [clicked] : [])).filter(u =>
         DATA_EXTS.includes(path.extname(u.fsPath).toLowerCase())

@@ -22,6 +22,8 @@ export class TableViewProvider {
   // Headers of the file loaded in each panel, for finding its format.
   private readonly panelHeaders = new Map<vscode.WebviewPanel, string[]>();
   private loadSeq = 0;
+  // Source file of the table view focused last (see activeFileUri).
+  private lastActiveUri: vscode.Uri | undefined;
   // Format-file reads/writes run one at a time so quick successive saves
   // (Scale/Offset edits) don't overwrite each other.
   private formatQueue: Promise<unknown> = Promise.resolve();
@@ -29,6 +31,13 @@ export class TableViewProvider {
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('tableDataView.presetFolder')) return;
+      for (const panel of this.panels.values()) this.postFormatInfo(panel);
+    }));
+    // A format file edited by hand (Open format file) shows up in the
+    // pull-downs once saved. Scale/Offset isn't re-applied to open tables.
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => {
+      const folder = path.resolve(this.presetFolder());
+      if (path.dirname(path.resolve(doc.uri.fsPath)) !== folder || !doc.uri.fsPath.toLowerCase().endsWith('.json')) return;
       for (const panel of this.panels.values()) this.postFormatInfo(panel);
     }));
   }
@@ -53,9 +62,12 @@ export class TableViewProvider {
     );
 
     this.panels.set(key, panel);
+    this.lastActiveUri = uri;
+    panel.onDidChangeViewState(e => { if (e.webviewPanel.active) this.lastActiveUri = uri; });
     panel.onDidDispose(() => {
       this.panels.delete(key);
       this.panelHeaders.delete(panel);
+      if (this.lastActiveUri?.fsPath === key) this.lastActiveUri = undefined;
     });
 
     const scriptUri = panel.webview.asWebviewUri(
@@ -90,9 +102,20 @@ export class TableViewProvider {
       } else if (msg.type === 'movePreset') {
         this.movePreset(panel, uri, msg.name, msg.delta);
       } else if (msg.type === 'renameFormat') {
-        this.renameFormat(panel);
+        this.renameFormat(panel, uri);
+      } else if (msg.type === 'openFormatFile') {
+        this.openFormatFile(panel);
       }
     });
+  }
+
+  // The file shown by the active table view, else by the one focused last. (A
+  // webview tab's context menu doesn't tell the command which tab it was.)
+  activeFileUri(): vscode.Uri | undefined {
+    for (const [fsPath, panel] of this.panels) {
+      if (panel.active) return vscode.Uri.file(fsPath);
+    }
+    return this.lastActiveUri;
   }
 
   // ---- File formats (Scale/Offset + selection presets) ----
@@ -223,22 +246,29 @@ export class TableViewProvider {
     await this.postFormatInfo(panel, next);
   }
 
-  private async renameFormat(panel: vscode.WebviewPanel): Promise<void> {
+  // Renames the file's format; a file with no format yet gets one under the
+  // entered name (and its .json file is written right away).
+  private async renameFormat(panel: vscode.WebviewPanel, uri: vscode.Uri): Promise<void> {
     const found = await this.enqueue(() => this.currentFormat(panel));
-    if (!found) return;
-    const old = found.stored.data.format.name;
+    const old = found?.stored.data.format.name;
     const next = (await vscode.window.showInputBox({
-      title: `Rename format "${old}"`,
-      value: old,
+      title: old !== undefined ? `Rename format "${old}"` : 'Name the format of this file',
+      prompt: old !== undefined ? undefined : 'A format file is created for files with these headers.',
+      value: old ?? path.basename(uri.fsPath, path.extname(uri.fsPath)),
       validateInput: v => (v.trim() ? undefined : 'Enter a name'),
     }))?.trim();
     if (!next || next === old) return;
     await this.enqueue(async () => {
-      // Re-read: the file may have changed while the input box was open.
-      const cur = await this.currentFormat(panel);
-      if (!cur) return;
       try {
-        await renameFormat(cur.stored, next);
+        // Re-read: the file may have changed while the input box was open.
+        const cur = await this.currentFormat(panel);
+        if (cur) {
+          await renameFormat(cur.stored, next);
+        } else {
+          const headers = this.panelHeaders.get(panel);
+          if (!headers) return;
+          await writeFormat(newFormat(this.presetFolder(), headers, next));
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`TableDataView: could not rename the format: ${message}`);
@@ -246,6 +276,12 @@ export class TableViewProvider {
     });
     // Other open files of this format show its name too.
     for (const p of this.panels.values()) this.postFormatInfo(p);
+  }
+
+  private async openFormatFile(panel: vscode.WebviewPanel): Promise<void> {
+    const found = await this.enqueue(() => this.currentFormat(panel));
+    if (!found) return;
+    await vscode.window.showTextDocument(vscode.Uri.file(found.stored.file), { preview: false });
   }
 
   // Moves a selection one place up (-1) or down (+1) in the pull-down.

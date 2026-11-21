@@ -20,6 +20,7 @@ A Visual Studio Code extension that displays CSV, TSV, and other tabular text fi
   - The X-axis column always stays selected
 - **Mouse drag** to scroll the table in any direction
 - The first column click (in the table or the Header panel) opens the graph for that column automatically
+- Right-click the table view's tab and choose **Reveal in Explorer** to select the source file in the Explorer
 - **Header** panel — a column list on the right, shown by default; toggle it with the **☰ Header** toolbar button. Click (Shift / Ctrl/Cmd) to select columns; right-click for the column menu
 
 ### Navigation
@@ -83,7 +84,7 @@ the matched column on the other side.
 ### File Formats and Column Presets
 Files with the same header layout (e.g. every CSV from one logger) are treated as one **file format**, recognised when at least 80% of the columns match. Each format is a `.json` file in the preset folder (setting `tableDataView.presetFolder`, default `~/.tabledataview/presets`).
 - **Scale/Offset** — when a file of a known format is opened, the format's saved Scale/Offset values are applied right away. Every Scale/Offset edit (typing a value, *Show original values*) is saved back to the format; hiding the rows or *Reset All* only resets the view. A file with no matching format gets a new format (named after the file) on its first edit or saved selection.
-- **Column selections** — the toolbar pull-down (`Format: <name>`) lists the format's saved selections as `name (found/saved)`; pick one to select those columns. The pull-down then shows that selection until you change the column selection. *Save current selection…* stores the selected columns under a name; for the selection shown, *Rename…*, *Move up / down* (order in the list) and *Delete…* are offered. *Rename format…* renames the format (and its `.json` file when that name is free).
+- **Column selections** — the toolbar pull-down (`Format: <name>`) lists the format's saved selections as `name (found/saved)`; pick one to select those columns. The pull-down then shows that selection until you change the column selection. *Save current selection…* stores the selected columns under a name; for the selection shown, *Rename…*, *Move up / down* (order in the list) and *Delete…* are offered. *Rename format…* renames the format (and its `.json` file when that name is free); for a file with no format yet it reads *Name this format…* and creates the format's `.json` file under the entered name. *Open format file (.json)* opens it in an editor; once saved, edits show up in the pull-down (Scale/Offset applies the next time a file is opened).
 - Columns are stored by header name and matched in this order, the first stage with exactly one candidate winning: same case and whole name → same case, name contained → any case, name contained. A name that matches no column, or several, is skipped with a message.
 
 ### Graph View

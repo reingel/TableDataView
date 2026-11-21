@@ -39,6 +39,11 @@
         "command": "tableDataView.compareFiles",
         "title": "TableDataView: compare",
         "category": "TableDataView"
+      },
+      {
+        "command": "tableDataView.revealInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "TableDataView"
       }
     ],
     "menus": {
@@ -66,9 +71,18 @@
           "command": "tableDataView.openTableView",
           "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat",
           "group": "navigation"
+        },
+        {
+          "command": "tableDataView.revealInExplorer",
+          "when": "activeWebviewPanelId == 'tableDataView'",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
+        {
+          "command": "tableDataView.revealInExplorer",
+          "when": "activeWebviewPanelId == 'tableDataView'"
+        },
         {
           "command": "tableDataView.openTableView",
           "when": "resourceExtname == .csv || resourceExtname == .tsv || resourceExtname == .txt || resourceExtname == .dat"

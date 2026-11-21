@@ -55,6 +55,7 @@ export function initPresets(opts: { post: Post; refresh: () => void; afterSelect
     else if (v === 'up' && name !== null) post({ type: 'movePreset', name, delta: -1 });
     else if (v === 'down' && name !== null) post({ type: 'movePreset', name, delta: 1 });
     else if (v === 'renameFormat') post({ type: 'renameFormat' });
+    else if (v === 'openFormatFile') post({ type: 'openFormatFile' });
     // Actions aren't a state to show; go back to the current selection.
     renderMenu();
   });
@@ -210,7 +211,8 @@ function renderMenu(): void {
     sel.appendChild(opt('delete', 'Delete selection…', info.presets.length === 0));
   }
   sel.appendChild(opt('sep2', '──────────', true));
-  sel.appendChild(opt('renameFormat', info.format ? `Rename format "${info.format.name}"…` : 'Rename format… (no format yet)', !info.format));
+  sel.appendChild(opt('renameFormat', info.format ? `Rename format "${info.format.name}"…` : 'Name this format…'));
+  sel.appendChild(opt('openFormatFile', 'Open format file (.json)', !info.format));
   sel.value = active >= 0 ? `p:${active}` : '';
   sel.title = info.format
     ? `Format "${info.format.name}" (${Math.round(info.format.ratio * 100)}% of columns match). Scale/Offset edits are saved to it.`

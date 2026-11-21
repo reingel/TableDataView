@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Table view tab right-click menu: Reveal in Explorer
+- "Name this format…" in the pull-down creates and saves a format for a file that has none yet
+- "Open format file (.json)" in the pull-down opens the format file in an editor; saved edits refresh the pull-down
+
 ## 3.3.0
 - File formats: files whose headers match ≥ 80% share a format, saved as a `.json` file in `tableDataView.presetFolder` (new setting, default `~/.tabledataview/presets`)
 - A format's Scale/Offset is applied when a file of that format is opened, and Scale/Offset edits are saved to it automatically

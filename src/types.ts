@@ -67,4 +67,5 @@ export type WebviewToExtensionMessage =
   | { type: 'deletePreset'; name?: string }
   | { type: 'renamePreset'; name: string }
   | { type: 'movePreset'; name: string; delta: -1 | 1 }
-  | { type: 'renameFormat' };
+  | { type: 'renameFormat' }
+  | { type: 'openFormatFile' };
