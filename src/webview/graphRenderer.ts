@@ -1061,7 +1061,12 @@ function initCanvasListener(): void {
   canvas.addEventListener('mousedown', handleMouseDown);
   canvas.addEventListener('mousemove', handleMouseMove);
   canvas.addEventListener('mouseup', handleMouseUp);
-  canvas.addEventListener('dblclick', () => { if (crosshairClickTimer !== null) { clearTimeout(crosshairClickTimer); crosshairClickTimer = null; pendingClickEvent = null; } goHome(); });
+  canvas.addEventListener('dblclick', e => {
+    if (crosshairClickTimer !== null) { clearTimeout(crosshairClickTimer); crosshairClickTimer = null; pendingClickEvent = null; }
+    const axis = axisTitleEditHandler ? hitAxisTitle(getCanvasPixelX(e), getCanvasPixelY(e)) : null;
+    if (axis) editAxisTitle(axis);
+    else goHome();
+  });
   canvas.addEventListener('wheel', handleWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
@@ -1484,10 +1489,103 @@ const zeroLinePlugin = {
   },
 };
 
+// ---- Axis titles ----
+// The default titles (x-axis header or "Row", "Value" / the difference mode)
+// can be replaced through a resolver, and edited by double-clicking a title
+// when an edit handler is set (single table view: saved with the file format).
+
+type Axis = 'x' | 'y';
+type AxisTitleResolver = (axis: Axis, defaultTitle: string) => string | undefined;
+let axisTitleResolver: AxisTitleResolver | null = null;
+let axisTitleEditHandler: ((axis: Axis, defaultTitle: string, text: string) => void) | null = null;
+let axisTitleInput: HTMLInputElement | null = null;
+
+function defaultAxisTitles(): { x: string; y: string } {
+  return {
+    x: colUsedAsX() ? lastHeaders[lastXAxisCol] : 'Row',
+    y: diffMode === 'L-R' ? 'L − R' : diffMode === 'R-L' ? 'R − L' : diffMode === '|L-R|' ? '|L − R|' : 'Value',
+  };
+}
+
+function axisTitles(): { x: string; y: string } {
+  const d = defaultAxisTitles();
+  // A custom y title describes plain values, not an L/R difference.
+  const y = diffMode === 'original' ? axisTitleResolver?.('y', d.y) : undefined;
+  return { x: axisTitleResolver?.('x', d.x) || d.x, y: y || d.y };
+}
+
+export function setAxisTitleResolver(r: AxisTitleResolver | null): void {
+  axisTitleResolver = r;
+}
+
+export function setAxisTitleEditHandler(h: ((axis: Axis, defaultTitle: string, text: string) => void) | null): void {
+  axisTitleEditHandler = h;
+}
+
+// Re-reads the titles (resolver data changed) without rebuilding the chart.
+export function refreshAxisTitles(): void {
+  if (!chartInstance) return;
+  const t = axisTitles();
+  chartInstance.options.scales.x.title.text = t.x;
+  chartInstance.options.scales.y.title.text = t.y;
+  chartInstance.update('none');
+}
+
+// The axis whose title band (outside the plot, along the x axis' bottom edge
+// or the y axis' left edge) contains the point.
+const AXIS_TITLE_BAND = 26;
+function hitAxisTitle(px: number, py: number): Axis | null {
+  if (!chartInstance) return null;
+  const a = chartInstance.chartArea, xs = chartInstance.scales.x, ys = chartInstance.scales.y;
+  if (px >= a.left && px <= a.right && py >= xs.bottom - AXIS_TITLE_BAND && py <= xs.bottom + 2) return 'x';
+  if (py >= a.top && py <= a.bottom && px >= ys.left - 2 && px <= ys.left + AXIS_TITLE_BAND) return 'y';
+  return null;
+}
+
+// An input over the title; Enter / leaving it commits, Esc cancels.
+function editAxisTitle(axis: Axis): void {
+  const canvas = document.getElementById('chart-canvas') as HTMLCanvasElement;
+  const parent = canvas.parentElement;
+  if (!parent || !chartInstance || !axisTitleEditHandler) return;
+  axisTitleInput?.remove();
+  if (!parent.style.position) parent.style.position = 'relative';
+  const a = chartInstance.chartArea;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'axis-title-input';
+  input.value = axisTitles()[axis];
+  input.spellcheck = false;
+  const w = 220;
+  const left = axis === 'x' ? canvas.offsetLeft + (a.left + a.right) / 2 - w / 2 : canvas.offsetLeft + 2;
+  const top = axis === 'x'
+    ? canvas.offsetTop + chartInstance.scales.x.bottom - AXIS_TITLE_BAND
+    : canvas.offsetTop + (a.top + a.bottom) / 2 - 12;
+  input.style.cssText = `position:absolute;z-index:20;left:${Math.max(0, left)}px;top:${top}px;width:${w}px;`;
+  const def = defaultAxisTitles()[axis];
+  let done = false;
+  const finish = (commit: boolean) => {
+    if (done) return;
+    done = true;
+    const text = input.value.trim();
+    input.remove();
+    if (axisTitleInput === input) axisTitleInput = null;
+    if (commit) axisTitleEditHandler?.(axis, def, text);
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => finish(true));
+  parent.appendChild(input);
+  axisTitleInput = input;
+  input.focus();
+  input.select();
+}
+
 function redraw(): void {
   const useColAsX = colUsedAsX();
-  const xLabel = useColAsX ? lastHeaders[lastXAxisCol] : 'Row';
-  const yLabel = diffMode === 'L-R' ? 'L − R' : diffMode === 'R-L' ? 'R − L' : diffMode === '|L-R|' ? '|L − R|' : 'Value';
+  const { x: xLabel, y: yLabel } = axisTitles();
   const dataCols = getDataCols();
   const xRange = computeXRange();
   const win = zoomXMin !== null ? { min: zoomXMin, max: zoomXMax! } : xRange;

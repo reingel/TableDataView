@@ -110,8 +110,21 @@ export function mergeScaleOffset(data: FormatFile, fileHeaders: string[], entrie
   data.scaleOffset = [...kept, ...fresh];
 }
 
+// Overwriting a selection keeps its y-axis title unless a new one is given.
 export function upsertPreset(data: FormatFile, preset: SelectionPreset): void {
   const i = data.presets.findIndex(p => p.name === preset.name);
-  if (i >= 0) data.presets[i] = preset;
-  else data.presets.push(preset);
+  if (i < 0) {
+    data.presets.push(preset);
+    return;
+  }
+  const yLabel = preset.yLabel ?? data.presets[i].yLabel;
+  data.presets[i] = yLabel !== undefined ? { ...preset, yLabel } : preset;
+}
+
+export function setXLabel(data: FormatFile, key: string, label: string): void {
+  const map = { ...(data.xLabels ?? {}) };
+  if (label) map[key] = label;
+  else delete map[key];
+  if (Object.keys(map).length > 0) data.xLabels = map;
+  else delete data.xLabels;
 }

@@ -4,7 +4,7 @@ import * as path from 'path';
 import { FormatInfo, WebviewToExtensionMessage } from './types';
 import { streamParseAndSend } from './webviewStream';
 import { saveGraphImage } from './saveImage';
-import { StoredFormat, expandPresetFolder, findFormat, listFormats, mergeScaleOffset, newFormat, renameFormat, upsertPreset, writeFormat } from './presetStore';
+import { StoredFormat, expandPresetFolder, findFormat, listFormats, mergeScaleOffset, newFormat, renameFormat, setXLabel, upsertPreset, writeFormat } from './presetStore';
 
 const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024;
 
@@ -94,7 +94,22 @@ export class TableViewProvider {
           return true;
         });
       } else if (msg.type === 'saveSelection') {
-        this.saveSelection(panel, uri, msg.columns);
+        this.saveSelection(panel, uri, msg.columns, msg.yLabel);
+      } else if (msg.type === 'saveXLabel') {
+        const { key, label } = msg;
+        this.withFormat(panel, uri, label !== '', stored => {
+          setXLabel(stored.data, key, label);
+          return true;
+        });
+      } else if (msg.type === 'saveYLabel') {
+        const { name, label } = msg;
+        this.withFormat(panel, uri, false, stored => {
+          const p = stored.data.presets.find(x => x.name === name);
+          if (!p) return false;
+          if (label) p.yLabel = label;
+          else delete p.yLabel;
+          return true;
+        });
       } else if (msg.type === 'deletePreset') {
         this.deletePreset(panel, uri, msg.name);
       } else if (msg.type === 'renamePreset') {
@@ -146,6 +161,7 @@ export class TableViewProvider {
         format: found ? { name: found.stored.data.format.name, ratio: found.ratio } : null,
         scaleOffset: found?.stored.data.scaleOffset ?? [],
         presets: found?.stored.data.presets ?? [],
+        xLabels: found?.stored.data.xLabels ?? {},
       };
       panel.webview.postMessage({ type: 'formatInfo', ...info, ...(focus !== undefined ? { focus } : {}) });
     });
@@ -176,7 +192,9 @@ export class TableViewProvider {
     });
   }
 
-  private async saveSelection(panel: vscode.WebviewPanel, uri: vscode.Uri, columns: Array<{ header: string }>): Promise<void> {
+  // yLabel: the graph y-axis title to keep with the selection (an edited
+  // title is what asked for the selection to be saved).
+  private async saveSelection(panel: vscode.WebviewPanel, uri: vscode.Uri, columns: Array<{ header: string }>, yLabel?: string): Promise<void> {
     const found = await this.enqueue(() => this.currentFormat(panel));
     const existing = found?.stored.data.presets ?? [];
     const name = (await vscode.window.showInputBox({
@@ -192,7 +210,7 @@ export class TableViewProvider {
       if (ok !== 'Overwrite') return;
     }
     await this.withFormat(panel, uri, true, stored => {
-      upsertPreset(stored.data, { name, savedAt: Date.now(), columns });
+      upsertPreset(stored.data, { name, savedAt: Date.now(), columns, ...(yLabel ? { yLabel } : {}) });
       return true;
     });
     await this.postFormatInfo(panel, name);
@@ -392,6 +410,15 @@ export class TableViewProvider {
       border-color: var(--vscode-inputValidation-warningBorder, #b87000);
       background: var(--vscode-inputValidation-warningBackground, #6b3600);
       color: var(--vscode-inputValidation-warningForeground, #fff);
+    }
+    .axis-title-input {
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 3px;
+      padding: 2px 6px;
+      font: inherit;
+      text-align: center;
     }
     #sel-preset {
       background: var(--vscode-dropdown-background);

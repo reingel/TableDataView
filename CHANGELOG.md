@@ -4,6 +4,7 @@
 - Table view tab right-click menu: Reveal in Explorer
 - "Name this format…" in the pull-down creates and saves a format for a file that has none yet
 - "Open format file (.json)" in the pull-down opens the format file in an editor; saved edits refresh the pull-down
+- Double-click a graph axis title to edit it: x title saved with the format (per x-axis column), y title saved with the shown selection (asks for a selection name when none is shown)
 
 ## 3.3.0
 - File formats: files whose headers match ≥ 80% share a format, saved as a `.json` file in `tableDataView.presetFolder` (new setting, default `~/.tabledataview/presets`)

@@ -2,6 +2,7 @@ import { FormatInfo, ScaleOffsetEntry, SelectionPreset } from '../types';
 import { matchHeader, isUniqueHeader } from '../presetMatch';
 import { getData, getScaleOffsetSnapshot, restoreScaleOffset } from './tableRenderer';
 import { getSelected, getXAxisCol, restoreSelection } from './columnSelector';
+import { refreshAxisTitles, setAxisTitleEditHandler, setAxisTitleResolver } from './graphRenderer';
 
 // File formats in the table view: when the extension recognises the loaded
 // file's format (by its headers), the format's Scale/Offset is applied right
@@ -13,7 +14,7 @@ type Post = (msg: object) => void;
 let post: Post = () => {};
 let refresh: () => void = () => {};
 let afterSelectionApplied: () => void = () => {};
-let info: FormatInfo = { format: null, scaleOffset: [], presets: [] };
+let info: FormatInfo = { format: null, scaleOffset: [], presets: [], xLabels: {} };
 // The saved selection shown as current in the pull-down, and the columns it
 // put on the table: it stays shown until the column selection changes.
 let activeName: string | null = null;
@@ -59,7 +60,41 @@ export function initPresets(opts: { post: Post; refresh: () => void; afterSelect
     // Actions aren't a state to show; go back to the current selection.
     renderMenu();
   });
+  setAxisTitleResolver((axis, def) => (axis === 'x' ? info.xLabels[def] : activePreset()?.yLabel));
+  setAxisTitleEditHandler(onAxisTitleEdit);
   renderMenu();
+}
+
+function activePreset(): SelectionPreset | undefined {
+  return activeName === null ? undefined : info.presets.find(p => p.name === activeName);
+}
+
+// A graph axis title was edited (double-click). x titles belong to the format
+// (keyed by the default title, i.e. the x-axis column); y titles to the shown
+// selection — with none shown, the current columns are saved as a selection
+// first (named by the user) and the title goes with it. '' = default title.
+function onAxisTitleEdit(axis: 'x' | 'y', def: string, text: string): void {
+  const label = text === def ? '' : text;
+  if (axis === 'x') {
+    if ((info.xLabels[def] ?? '') === label) return;
+    const xLabels = { ...info.xLabels };
+    if (label) xLabels[def] = label;
+    else delete xLabels[def];
+    info = { ...info, xLabels };
+    refreshAxisTitles();
+    post({ type: 'saveXLabel', key: def, label });
+    return;
+  }
+  const preset = activePreset();
+  if (preset) {
+    if ((preset.yLabel ?? '') === label) return;
+    if (label) preset.yLabel = label;
+    else delete preset.yLabel;
+    refreshAxisTitles();
+    post({ type: 'saveYLabel', name: preset.name, label });
+  } else if (label) {
+    saveSelection(label);
+  }
 }
 
 // A new format list from the extension. applyScaleOffset: this is the first
@@ -68,7 +103,7 @@ export function initPresets(opts: { post: Post; refresh: () => void; afterSelect
 // focus: a selection just saved / renamed / moved, which is what the table
 // currently shows, so it becomes the pull-down's current item.
 export function onFormatInfo(next: FormatInfo & { focus?: string }, applyScaleOffset: boolean): void {
-  info = next;
+  info = { ...next, xLabels: next.xLabels ?? {} };
   if (next.focus !== undefined && next.presets.some(p => p.name === next.focus)) {
     activeName = next.focus;
     activeCols = selectionKey();
@@ -123,7 +158,8 @@ function saveScaleOffset(): void {
   if (skipped.length) notify(`Scale/Offset not saved for duplicate column names: ${[...new Set(skipped)].join(', ')}`, 'warning');
 }
 
-function saveSelection(): void {
+// yLabel: an edited graph y title to keep with the new selection.
+function saveSelection(yLabel?: string): void {
   const hs = headers();
   const x = getXAxisCol();
   const cols = getSelected().filter(c => c !== x).sort((a, b) => a - b);
@@ -138,7 +174,7 @@ function saveSelection(): void {
     return;
   }
   if (dup.length) notify(`Not saved in the selection (duplicate column names): ${[...new Set(dup)].join(', ')}`, 'warning');
-  post({ type: 'saveSelection', columns: unique.map(c => ({ header: hs[c] })) });
+  post({ type: 'saveSelection', columns: unique.map(c => ({ header: hs[c] })), ...(yLabel ? { yLabel } : {}) });
 }
 
 function applySelection(preset: SelectionPreset | undefined): void {
@@ -214,6 +250,8 @@ function renderMenu(): void {
   sel.appendChild(opt('renameFormat', info.format ? `Rename format "${info.format.name}"…` : 'Name this format…'));
   sel.appendChild(opt('openFormatFile', 'Open format file (.json)', !info.format));
   sel.value = active >= 0 ? `p:${active}` : '';
+  // The y title follows the shown selection, the x titles the format.
+  refreshAxisTitles();
   sel.title = info.format
     ? `Format "${info.format.name}" (${Math.round(info.format.ratio * 100)}% of columns match). Scale/Offset edits are saved to it.`
     : 'No saved format matches this file. Saving a selection or editing Scale/Offset creates one.';

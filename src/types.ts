@@ -40,17 +40,22 @@ export type ExtensionToWebviewMessage =
 // a file of that format is opened and named column selections. Columns are
 // referred to by header (see presetMatch), never by index.
 export type ScaleOffsetEntry = { header: string; scale: number; offset: number };
-export type SelectionPreset = { name: string; savedAt: number; columns: Array<{ header: string }> };
+// yLabel: graph y-axis title while this selection is shown.
+export type SelectionPreset = { name: string; savedAt: number; columns: Array<{ header: string }>; yLabel?: string };
 export type FormatFile = {
   version: 1;
   format: { name: string; headers: string[] };
   scaleOffset: ScaleOffsetEntry[];
   presets: SelectionPreset[];
+  // Graph x-axis titles, keyed by the default title they replace (the x-axis
+  // column's header, or "Row").
+  xLabels?: Record<string, string>;
 };
 export type FormatInfo = {
   format: { name: string; ratio: number } | null;
   scaleOffset: ScaleOffsetEntry[];
   presets: SelectionPreset[];
+  xLabels: Record<string, string>;
 };
 
 export type WebviewToExtensionMessage =
@@ -62,7 +67,10 @@ export type WebviewToExtensionMessage =
   | { type: 'formatInfoRequest' }
   // Scale/Offset of every column whose header is unique in the file.
   | { type: 'saveScaleOffset'; entries: ScaleOffsetEntry[] }
-  | { type: 'saveSelection'; columns: Array<{ header: string }> }
+  | { type: 'saveSelection'; columns: Array<{ header: string }>; yLabel?: string }
+  // label '' = back to the default title.
+  | { type: 'saveXLabel'; key: string; label: string }
+  | { type: 'saveYLabel'; name: string; label: string }
   // name omitted: pick one in a quick pick.
   | { type: 'deletePreset'; name?: string }
   | { type: 'renamePreset'; name: string }
