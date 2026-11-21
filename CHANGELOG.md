@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Graph toolbar: Legend position pull-down (top / right / bottom / left) next to Marker; Save uses it (its own legend option removed)
 - Table view tab right-click menu: Reveal in Explorer
 - "Name this format…" in the pull-down creates and saves a format for a file that has none yet
 - "Open format file (.json)" in the pull-down opens the format file in an editor; saved edits refresh the pull-down

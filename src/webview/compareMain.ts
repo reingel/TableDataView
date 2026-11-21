@@ -2,7 +2,7 @@ import { initGraphSave } from './graphSave';
 import { ExtensionToWebviewMessage } from '../types';
 import { TableBuilder, TableFile } from './tableData';
 import { getColumnStore } from './columnCache';
-import { renderGraph, GraphSource, getVisibleXWindow, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
+import { renderGraph, GraphSource, getVisibleXWindow, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setLegendPosition, LegendPosition, setRowHighlightCallback, setExtraYValuesCallback, setCrosshairToRow, setHoveredColumns, updateViewport, setGraphDiffMode } from './graphRenderer';
 import { detectDefaultXAxis, SEQ_X, onSelectionEscape } from './columnSelector';
 import { visibleColumns, spacerCell } from './columnWindow';
 
@@ -2454,6 +2454,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('sel-marker')!.addEventListener('change', e => {
     setMarkerStyle((e.target as HTMLSelectElement).value);
+  });
+  document.getElementById('sel-legend')!.addEventListener('change', e => {
+    setLegendPosition((e.target as HTMLSelectElement).value as LegendPosition);
   });
 
   initGraphSave(msg => vscode.postMessage(msg));

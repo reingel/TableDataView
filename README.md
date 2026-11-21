@@ -112,7 +112,8 @@ Select one or more columns, then click **Graph**. The first column click in a ne
 - Adjustable **Line width** (0.5 / 1.0 / 1.5 / 2.0 / 3.0)
 - **Marker** style (none / `.` / `o`) — defaults to `.`
 - **Hide Crosshair** — hides both crosshairs
-- **Save** — saves the graph as a PNG. Options: size (current view, or 8 × 6 in at 150 dpi = 1200 × 900 px), legend position (top / right / left / bottom), and minimap (off by default). The image keeps the visible x/y range and uses a white background; a file dialog asks for the file name.
+- **Legend** — legend position (top / right / bottom / left), next to *Marker*; also used by *Save*.
+- **Save** — saves the graph as a PNG. Options: size (current view, or 8 × 6 in at 150 dpi = 1200 × 900 px) and minimap (off by default); the legend is placed as set in the toolbar. The image keeps the visible x/y range and uses a white background; a file dialog asks for the file name.
 - **✕** — closes the graph panel (the toolbar **Graph** button toggles it too)
 
 ---

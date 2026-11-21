@@ -9,6 +9,9 @@ let chartInstance: any = null;
 let fftChartInstance: any = null;
 let lineWidth: number = 1;
 let markerStyle: string = 'dot';
+export type LegendPosition = 'top' | 'right' | 'bottom' | 'left';
+// Graph toolbar's Legend select; PNG export uses it too.
+let legendPosition: LegendPosition = 'top';
 let crosshairDataX: number | null = null;
 let crosshairOrigRowIdx: number | null = null;
 let crosshair2DataX: number | null = null;
@@ -1306,7 +1309,6 @@ function redrawFFT(): void {
 export type GraphExportOptions = {
   width: number; height: number;   // logical (CSS) px
   pixelRatio: number;              // output px per CSS px
-  legend: 'top' | 'right' | 'left' | 'bottom';
   minimap: boolean;
 };
 
@@ -1362,7 +1364,7 @@ export function exportGraphPng(opts: GraphExportOptions): string | null {
         plugins: {
           legend: {
             display: getDataCols().length > 1 || lastRightData !== undefined,
-            position: opts.legend,
+            position: legendPosition,
             labels: { filter: (item: any) => item.text !== '', color: TEXT },
           },
           tooltip: { enabled: false },
@@ -1603,6 +1605,7 @@ function redraw(): void {
     chartInstance.data.datasets = datasets;
     const o = chartInstance.options;
     o.plugins.legend.display = legendDisplay;
+    o.plugins.legend.position = legendPosition;
     o.scales.x.title.text = xLabel;
     o.scales.x.min = win?.min;
     o.scales.x.max = win?.max;
@@ -1625,6 +1628,7 @@ function redraw(): void {
         plugins: {
           legend: {
             display: legendDisplay,
+            position: legendPosition,
             labels: { filter: (item: any) => item.text !== '' },
           },
           tooltip: { enabled: false },
@@ -1701,6 +1705,16 @@ export function setLineWidth(width: number): void {
   lineWidth = width;
   if (lastCols.length > 0) redraw();
   if (lastFftDatasets.length > 0) redrawFFT();
+}
+
+export function setLegendPosition(pos: LegendPosition): void {
+  legendPosition = pos;
+  if (!chartInstance) return;
+  chartInstance.options.plugins.legend.position = pos;
+  chartInstance.update('none');
+  // The plot area moved; the hover highlight has to follow it.
+  hoverPathCache.clear();
+  scheduleHoverDraw();
 }
 
 export function setMarkerStyle(style: string): void {

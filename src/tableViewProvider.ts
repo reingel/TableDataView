@@ -861,6 +861,15 @@ export class TableViewProvider {
           <option value="circle">o</option>
         </select>
       </label>
+      <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;">
+        Legend
+        <select id="sel-legend" style="background:var(--vscode-dropdown-background);color:var(--vscode-dropdown-foreground);border:1px solid var(--vscode-dropdown-border);padding:1px 4px;font-size:1em;">
+          <option value="top" selected>Top</option>
+          <option value="right">Right</option>
+          <option value="bottom">Bottom</option>
+          <option value="left">Left</option>
+        </select>
+      </label>
       <button id="btn-save-graph" title="Save graph as PNG">Save</button>
       <button id="btn-close-graph" title="Close graph">&#x2715;</button>
       <div id="graph-save-popover" class="hidden">
@@ -868,14 +877,6 @@ export class TableViewProvider {
           <select id="sel-save-size">
             <option value="current" selected>Current view</option>
             <option value="in8x6">8 × 6 in (150 dpi)</option>
-          </select>
-        </label>
-        <label>Legend
-          <select id="sel-save-legend">
-            <option value="top" selected>Top</option>
-            <option value="right">Right</option>
-            <option value="left">Left</option>
-            <option value="bottom">Bottom</option>
           </select>
         </label>
         <label class="chk"><input type="checkbox" id="chk-save-minimap"> Show minimap</label>

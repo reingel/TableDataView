@@ -6,7 +6,7 @@ import { initPresets, onFormatInfo, scheduleScaleOffsetSave, onSelectionChanged 
 import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick, clearSelection, onSelectionEscape } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { getColumnStore } from './columnCache';
-import { renderGraph, GraphSource, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
+import { renderGraph, GraphSource, resetZoom, resetCrosshairs, hideCrosshairs, closeGraph, setLineWidth, setMarkerStyle, setLegendPosition, LegendPosition, setRowHighlightCallback, setCrosshairToRow, setHoveredColumns, updateViewport, renderFFTPaneFromGraph, isFFTPaneVisible, closeFFTPane } from './graphRenderer';
 
 declare function acquireVsCodeApi(): {
   postMessage: (msg: object) => void;
@@ -837,6 +837,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('sel-marker')!.addEventListener('change', e => {
     setMarkerStyle((e.target as HTMLSelectElement).value);
+  });
+  document.getElementById('sel-legend')!.addEventListener('change', e => {
+    setLegendPosition((e.target as HTMLSelectElement).value as LegendPosition);
   });
 
   addDragScroll(document.getElementById('table-container')!);

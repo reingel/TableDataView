@@ -14,7 +14,6 @@ export function initGraphSave(post: (msg: object) => void): void {
   const btn = document.getElementById('btn-save-graph')!;
   const pop = document.getElementById('graph-save-popover')!;
   const sizeSel = document.getElementById('sel-save-size') as HTMLSelectElement;
-  const legendSel = document.getElementById('sel-save-legend') as HTMLSelectElement;
   const minimapChk = document.getElementById('chk-save-minimap') as HTMLInputElement;
   const close = () => pop.classList.add('hidden');
 
@@ -40,11 +39,7 @@ export function initGraphSave(post: (msg: object) => void): void {
       if (!cur) return;
       size = { width: Math.round(cur.width), height: Math.round(cur.height), pixelRatio: window.devicePixelRatio || 1 };
     }
-    const opts: GraphExportOptions = {
-      ...size,
-      legend: legendSel.value as GraphExportOptions['legend'],
-      minimap: minimapChk.checked,
-    };
+    const opts: GraphExportOptions = { ...size, minimap: minimapChk.checked };
     const dataUrl = exportGraphPng(opts);
     if (dataUrl) post({ type: 'saveGraphImage', dataUrl });
   });
