@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { WebviewToExtensionMessage } from './types';
+import { FormatInfo, WebviewToExtensionMessage } from './types';
 import { streamParseAndSend } from './webviewStream';
 import { saveGraphImage } from './saveImage';
+import { StoredFormat, expandPresetFolder, findFormat, listFormats, mergeScaleOffset, newFormat, renameFormat, upsertPreset, writeFormat } from './presetStore';
 
 const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024;
 
@@ -18,9 +19,19 @@ function getNonce(): string {
 
 export class TableViewProvider {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  // Headers of the file loaded in each panel, for finding its format.
+  private readonly panelHeaders = new Map<vscode.WebviewPanel, string[]>();
   private loadSeq = 0;
+  // Format-file reads/writes run one at a time so quick successive saves
+  // (Scale/Offset edits) don't overwrite each other.
+  private formatQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+      if (!e.affectsConfiguration('tableDataView.presetFolder')) return;
+      for (const panel of this.panels.values()) this.postFormatInfo(panel);
+    }));
+  }
 
   createOrShowPanel(uri: vscode.Uri): void {
     const key = uri.fsPath;
@@ -42,7 +53,10 @@ export class TableViewProvider {
     );
 
     this.panels.set(key, panel);
-    panel.onDidDispose(() => this.panels.delete(key));
+    panel.onDidDispose(() => {
+      this.panels.delete(key);
+      this.panelHeaders.delete(panel);
+    });
 
     const scriptUri = panel.webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'out', 'webview.js')
@@ -56,8 +70,195 @@ export class TableViewProvider {
       } else if (msg.type === 'saveGraphImage') {
         const base = path.basename(uri.fsPath, path.extname(uri.fsPath));
         saveGraphImage(msg.dataUrl, vscode.Uri.joinPath(uri, '..', `${base}_graph.png`));
+      } else if (msg.type === 'notify') {
+        if (msg.level === 'warning') vscode.window.showWarningMessage(`TableDataView: ${msg.message}`);
+        else vscode.window.showInformationMessage(`TableDataView: ${msg.message}`);
+      } else if (msg.type === 'formatInfoRequest') {
+        this.postFormatInfo(panel);
+      } else if (msg.type === 'saveScaleOffset') {
+        const entries = msg.entries;
+        this.withFormat(panel, uri, entries.some(e => e.scale !== 1 || e.offset !== 0), (stored, headers) => {
+          mergeScaleOffset(stored.data, headers, entries);
+          return true;
+        });
+      } else if (msg.type === 'saveSelection') {
+        this.saveSelection(panel, uri, msg.columns);
+      } else if (msg.type === 'deletePreset') {
+        this.deletePreset(panel, uri, msg.name);
+      } else if (msg.type === 'renamePreset') {
+        this.renamePreset(panel, uri, msg.name);
+      } else if (msg.type === 'movePreset') {
+        this.movePreset(panel, uri, msg.name, msg.delta);
+      } else if (msg.type === 'renameFormat') {
+        this.renameFormat(panel);
       }
     });
+  }
+
+  // ---- File formats (Scale/Offset + selection presets) ----
+
+  private presetFolder(): string {
+    const raw = vscode.workspace.getConfiguration('tableDataView').get<string>('presetFolder') ?? '';
+    return expandPresetFolder(raw, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+  }
+
+  private enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const run = this.formatQueue.then(job, job);
+    this.formatQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async currentFormat(panel: vscode.WebviewPanel): Promise<{ stored: StoredFormat; ratio: number } | null> {
+    const headers = this.panelHeaders.get(panel);
+    if (!headers) return null;
+    const formats = await listFormats(this.presetFolder(), (file, why) =>
+      console.warn(`TableDataView: skipped format file ${file}: ${why}`));
+    return findFormat(formats, headers);
+  }
+
+  private postFormatInfo(panel: vscode.WebviewPanel, focus?: string): Promise<void> {
+    return this.enqueue(async () => {
+      const found = await this.currentFormat(panel);
+      const info: FormatInfo = {
+        format: found ? { name: found.stored.data.format.name, ratio: found.ratio } : null,
+        scaleOffset: found?.stored.data.scaleOffset ?? [],
+        presets: found?.stored.data.presets ?? [],
+      };
+      panel.webview.postMessage({ type: 'formatInfo', ...info, ...(focus !== undefined ? { focus } : {}) });
+    });
+  }
+
+  // Runs `change` on the panel's format (created, named after the file, when
+  // there is none yet and `create` is set) and writes it if `change` says so.
+  private withFormat(
+    panel: vscode.WebviewPanel, uri: vscode.Uri, create: boolean,
+    change: (stored: StoredFormat, headers: string[]) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      const headers = this.panelHeaders.get(panel);
+      if (!headers) return;
+      try {
+        const found = await this.currentFormat(panel);
+        if (!found && !create) return;
+        const stored = found?.stored
+          ?? newFormat(this.presetFolder(), headers, path.basename(uri.fsPath, path.extname(uri.fsPath)));
+        if (!(await change(stored, headers))) return;
+        await writeFormat(stored);
+        // A new format changes what the toolbar shows (its name).
+        if (!found) this.postFormatInfo(panel);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`TableDataView: could not save the format file: ${message}`);
+      }
+    });
+  }
+
+  private async saveSelection(panel: vscode.WebviewPanel, uri: vscode.Uri, columns: Array<{ header: string }>): Promise<void> {
+    const found = await this.enqueue(() => this.currentFormat(panel));
+    const existing = found?.stored.data.presets ?? [];
+    const name = (await vscode.window.showInputBox({
+      title: 'Save column selection',
+      prompt: found ? `Preset name (format: ${found.stored.data.format.name})` : 'Preset name (a new format is created for this file)',
+      value: `Selection ${existing.length + 1}`,
+      validateInput: v => (v.trim() ? undefined : 'Enter a name'),
+    }))?.trim();
+    if (!name) return;
+    if (existing.some(p => p.name === name)) {
+      const ok = await vscode.window.showWarningMessage(
+        `A preset named "${name}" already exists. Overwrite it?`, { modal: true }, 'Overwrite');
+      if (ok !== 'Overwrite') return;
+    }
+    await this.withFormat(panel, uri, true, stored => {
+      upsertPreset(stored.data, { name, savedAt: Date.now(), columns });
+      return true;
+    });
+    await this.postFormatInfo(panel, name);
+  }
+
+  // name omitted: let the user pick the selection to delete.
+  private async deletePreset(panel: vscode.WebviewPanel, uri: vscode.Uri, name?: string): Promise<void> {
+    if (name === undefined) {
+      const found = await this.enqueue(() => this.currentFormat(panel));
+      const presets = found?.stored.data.presets ?? [];
+      if (presets.length === 0) {
+        vscode.window.showInformationMessage('TableDataView: this format has no saved selections.');
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        presets.map(p => ({ label: p.name, description: p.columns.map(c => c.header).join(', ') })),
+        { title: `Delete a column selection (format: ${found!.stored.data.format.name})` });
+      if (!pick) return;
+      name = pick.label;
+    }
+    const target = name;
+    const ok = await vscode.window.showWarningMessage(`Delete selection "${target}"?`, { modal: true }, 'Delete');
+    if (ok !== 'Delete') return;
+    await this.withFormat(panel, uri, false, stored => {
+      const before = stored.data.presets.length;
+      stored.data.presets = stored.data.presets.filter(p => p.name !== target);
+      return stored.data.presets.length !== before;
+    });
+    await this.postFormatInfo(panel);
+  }
+
+  private async renamePreset(panel: vscode.WebviewPanel, uri: vscode.Uri, name: string): Promise<void> {
+    const found = await this.enqueue(() => this.currentFormat(panel));
+    const others = (found?.stored.data.presets ?? []).map(p => p.name).filter(n => n !== name);
+    const next = (await vscode.window.showInputBox({
+      title: `Rename selection "${name}"`,
+      value: name,
+      validateInput: v => {
+        const t = v.trim();
+        if (!t) return 'Enter a name';
+        return others.includes(t) ? `A selection named "${t}" already exists` : undefined;
+      },
+    }))?.trim();
+    if (!next || next === name) return;
+    await this.withFormat(panel, uri, false, stored => {
+      const p = stored.data.presets.find(x => x.name === name);
+      if (!p || stored.data.presets.some(x => x.name === next)) return false;
+      p.name = next;
+      return true;
+    });
+    await this.postFormatInfo(panel, next);
+  }
+
+  private async renameFormat(panel: vscode.WebviewPanel): Promise<void> {
+    const found = await this.enqueue(() => this.currentFormat(panel));
+    if (!found) return;
+    const old = found.stored.data.format.name;
+    const next = (await vscode.window.showInputBox({
+      title: `Rename format "${old}"`,
+      value: old,
+      validateInput: v => (v.trim() ? undefined : 'Enter a name'),
+    }))?.trim();
+    if (!next || next === old) return;
+    await this.enqueue(async () => {
+      // Re-read: the file may have changed while the input box was open.
+      const cur = await this.currentFormat(panel);
+      if (!cur) return;
+      try {
+        await renameFormat(cur.stored, next);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`TableDataView: could not rename the format: ${message}`);
+      }
+    });
+    // Other open files of this format show its name too.
+    for (const p of this.panels.values()) this.postFormatInfo(p);
+  }
+
+  // Moves a selection one place up (-1) or down (+1) in the pull-down.
+  private async movePreset(panel: vscode.WebviewPanel, uri: vscode.Uri, name: string, delta: -1 | 1): Promise<void> {
+    await this.withFormat(panel, uri, false, stored => {
+      const list = stored.data.presets;
+      const i = list.findIndex(p => p.name === name);
+      const j = i + delta;
+      if (i < 0 || j < 0 || j >= list.length) return false;
+      [list[i], list[j]] = [list[j], list[i]];
+      return true;
+    });
+    await this.postFormatInfo(panel, name);
   }
 
   private async loadFile(panel: vscode.WebviewPanel, uri: vscode.Uri): Promise<void> {
@@ -74,7 +275,9 @@ export class TableViewProvider {
       // hundreds of MB) file is loaded; streamParseAndSend then parses and
       // streams it incrementally, yielding between chunks.
       const content = await fs.promises.readFile(uri.fsPath, 'utf-8');
-      await streamParseAndSend(panel, content, uri.fsPath, 'single', seq);
+      const headers = await streamParseAndSend(panel, content, uri.fsPath, 'single', seq);
+      this.panelHeaders.set(panel, headers);
+      await this.postFormatInfo(panel);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       panel.webview.postMessage({ type: 'error', message: `Failed to read file: ${message}` });
@@ -153,6 +356,16 @@ export class TableViewProvider {
       border-color: var(--vscode-inputValidation-warningBorder, #b87000);
       background: var(--vscode-inputValidation-warningBackground, #6b3600);
       color: var(--vscode-inputValidation-warningForeground, #fff);
+    }
+    #sel-preset {
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 6px;
+      padding: 2px 6px;
+      font-size: 0.9em;
+      max-width: 260px;
+      cursor: pointer;
     }
     #btn-reset-all:hover { background: var(--vscode-editorWarning-foreground, #b87000); }
     #main-row {
@@ -498,6 +711,7 @@ export class TableViewProvider {
     <button id="btn-scale-offset" title="Show the per-column scale and offset rows">Scale/Offset</button>
     <button id="btn-show-graph" disabled>Graph</button>
     <button id="btn-reset-all" class="hidden">Reset All</button>
+    <select id="sel-preset"></select>
     <div class="toolbar-sep"></div>
     <span id="file-name"></span>
     <span id="truncate-notice" class="hidden"></span>

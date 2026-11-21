@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.0
+- File formats: files whose headers match ≥ 80% share a format, saved as a `.json` file in `tableDataView.presetFolder` (new setting, default `~/.tabledataview/presets`)
+- A format's Scale/Offset is applied when a file of that format is opened, and Scale/Offset edits are saved to it automatically
+- Toolbar pull-down to save, load, rename, reorder (move up/down) and delete named column selections per format; the applied selection stays shown in the pull-down until the column selection changes
+- Rename format from the pull-down (the `.json` file is renamed too when the name is free)
+
 ## 3.2.0
 - Alt/Option+click selects only that column; Esc clears the selection (x-axis stays)
 - Fix: Shift+click range could start from column 0 after clicking a cell of the x-axis (time) column

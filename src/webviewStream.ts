@@ -22,13 +22,14 @@ function yieldToEventLoop(): Promise<void> {
 // webview as loadStart -> chunk* -> end. Unlike parseFile()+streamParsedFile(),
 // this never holds more than one chunk of parsed rows on the extension side and
 // yields to the event loop between chunks, so the host stays responsive.
+// Resolves to the file's headers.
 export async function streamParseAndSend(
   panel: vscode.WebviewPanel,
   content: string,
   filePath: string,
   channel: LoadChannel,
   seq: number
-): Promise<void> {
+): Promise<string[]> {
   const fileName = path.basename(filePath);
 
   // Split into lines and drop blanks in a single pass (filter would allocate a
@@ -46,7 +47,7 @@ export async function streamParseAndSend(
     };
     panel.webview.postMessage({ type: 'loadStart', channel, seq, meta });
     panel.webview.postMessage({ type: 'loadEnd', channel, seq });
-    return;
+    return [];
   }
 
   const delimiter = detectDelimiter(lines);
@@ -91,4 +92,5 @@ export async function streamParseAndSend(
   }
   if (batchLines.length > 0) send();
   panel.webview.postMessage({ type: 'loadEnd', channel, seq });
+  return headers;
 }

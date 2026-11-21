@@ -1,7 +1,8 @@
 import { initGraphSave } from './graphSave';
 import { ExtensionToWebviewMessage } from '../types';
 import { TableBuilder, TableFile } from './tableData';
-import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, getScale, getOffset, toggleScaleOffsetRows, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, hasScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState } from './tableRenderer';
+import { render as renderTable, setCrosshairRow, getCrosshairRow, scrollToRow, getData, getRowHeight, isDiff, hasDiff, setDiff, clearDiff, clearAllDiff, hasMovAvg, setMovAvg, clearMovAvg, clearAllMovAvg, getMovAvgWindowSize, getDiffValue, getMovAvgValue, getDiffColsSnapshot, getMovAvgColsSnapshot, setRowClickCallback, isHex, hasHex, setHex, clearHex, clearAllHex, getHexColsSnapshot, isScaled, applyScaleOffset, getScale, getOffset, toggleScaleOffsetRows, isScaleRowVisible, isOffsetRowVisible, resetScaleOffset, clearAllScaleOffset, hasScaleOffset, getScaleOffsetSnapshot, restoreScaleOffset, ScaleOffsetState, setScaleOffsetEditCallback } from './tableRenderer';
+import { initPresets, onFormatInfo, scheduleScaleOffsetSave, onSelectionChanged } from './presets';
 import { getSelected, getXAxisCol, getDefaultXAxisCol, getLastClickedCol, setXAxisCol, resetXAxis, restoreSelection, handleColumnClick, clearSelection, onSelectionEscape } from './columnSelector';
 import { init as initContextMenu, show as showContextMenu } from './contextMenu';
 import { getColumnStore } from './columnCache';
@@ -35,10 +36,11 @@ function saveReloadState(): void {
   };
 }
 
-function restoreReloadState(headers: string[]): void {
+// Returns whether a reload's state was put back.
+function restoreReloadState(headers: string[]): boolean {
   const s = pendingReload;
   pendingReload = null;
-  if (!s || s.headers.join('\0') !== headers.join('\0')) return;
+  if (!s || s.headers.join('\0') !== headers.join('\0')) return false;
   for (const col of s.diffCols) setDiff(col);
   for (const [col, ws] of s.movAvgCols) setMovAvg(col, ws);
   for (const col of s.hexCols) setHex(col);
@@ -49,10 +51,12 @@ function restoreReloadState(headers: string[]): void {
     c.scrollTop = s.scrollTop;
     c.scrollLeft = s.scrollLeft;
   });
+  return true;
 }
 
 function updateToolbar(): void {
   const selected = getSelected();
+  onSelectionChanged();
   // Graph toggles the graph pane: always usable to close it, needs a selection to open it.
   const graphOpen = isGraphOpen();
   const graphBtn = document.getElementById('btn-show-graph') as HTMLButtonElement;
@@ -212,12 +216,17 @@ window.addEventListener('message', (event: MessageEvent) => {
       onLoadData(payload);
       hideLoading();
     }
+  } else if (msg.type === 'formatInfo') {
+    onFormatInfo(msg, formatScaleOffsetPending);
+    formatScaleOffsetPending = false;
   } else if (msg.type === 'error') {
     const container = document.getElementById('table-container')!;
     container.innerHTML = `<div class="error-message">${escapeHtml(msg.message)}</div>`;
     hideLoading();
   }
 });
+
+let formatScaleOffsetPending = false;
 
 function onLoadData(payload: TableFile): void {
   currentData = payload;
@@ -231,7 +240,9 @@ function onLoadData(payload: TableFile): void {
   }
 
   renderTable(payload, updateToolbar);
-  restoreReloadState(payload.headers);
+  // The file format's saved Scale/Offset (arriving next as formatInfo) goes
+  // on a fresh load, not over the values a reload just put back.
+  formatScaleOffsetPending = !restoreReloadState(payload.headers);
   renderHeaderPanel();
   updateToolbar();
 }
@@ -834,6 +845,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initColSearch();
   initHeaderPanel();
   onSelectionEscape(clearSelection);
+  initPresets({ post: m => vscode.postMessage(m), refresh: updateToolbar, afterSelectionApplied: maybeAutoShowGraph });
+  setScaleOffsetEditCallback(scheduleScaleOffsetSave);
 
   document.getElementById('table-container')!.addEventListener('scroll', syncViewport, { passive: true });
 

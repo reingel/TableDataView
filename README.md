@@ -80,6 +80,12 @@ Scale and offset stack on top of the diff / moving-average transforms and are pr
 **Reload**. In compare view, scale and offset are independent per file: editing one side does not change
 the matched column on the other side.
 
+### File Formats and Column Presets
+Files with the same header layout (e.g. every CSV from one logger) are treated as one **file format**, recognised when at least 80% of the columns match. Each format is a `.json` file in the preset folder (setting `tableDataView.presetFolder`, default `~/.tabledataview/presets`).
+- **Scale/Offset** — when a file of a known format is opened, the format's saved Scale/Offset values are applied right away. Every Scale/Offset edit (typing a value, *Show original values*) is saved back to the format; hiding the rows or *Reset All* only resets the view. A file with no matching format gets a new format (named after the file) on its first edit or saved selection.
+- **Column selections** — the toolbar pull-down (`Format: <name>`) lists the format's saved selections as `name (found/saved)`; pick one to select those columns. The pull-down then shows that selection until you change the column selection. *Save current selection…* stores the selected columns under a name; for the selection shown, *Rename…*, *Move up / down* (order in the list) and *Delete…* are offered. *Rename format…* renames the format (and its `.json` file when that name is free).
+- Columns are stored by header name and matched in this order, the first stage with exactly one candidate winning: same case and whole name → same case, name contained → any case, name contained. A name that matches no column, or several, is skipped with a message.
+
 ### Graph View
 
 Select one or more columns, then click **Graph**. The first column click in a newly opened view opens the graph automatically.

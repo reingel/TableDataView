@@ -2,7 +2,7 @@
   "name": "tabledataview",
   "displayName": "TableDataView",
   "description": "View CSV/TSV/DAT files as interactive tables with graph support",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "publisher": "reingel",
   "repository": {
     "type": "git",
@@ -19,6 +19,16 @@
   "main": "./out/extension.js",
   "activationEvents": [],
   "contributes": {
+    "configuration": {
+      "title": "TableDataView",
+      "properties": {
+        "tableDataView.presetFolder": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder where file formats are saved as `.json` files (per format: the Scale/Offset applied when a file of that format is opened, and named column selections). Empty = `~/.tabledataview/presets`. `~` and `${workspaceFolder}` are expanded."
+        }
+      }
+    },
     "commands": [
       {
         "command": "tableDataView.openTableView",

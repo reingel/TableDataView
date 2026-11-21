@@ -28,6 +28,14 @@ let offsetRowVisible = true;
 let scales: number[] = [];
 let offsets: number[] = [];
 let onChangeCallback: (() => void) | null = null;
+// Called when the user changes a Scale/Offset value (typing a value, "Show
+// original values") — not for the row toggle, Reset All or restores — so the
+// file format can save it.
+let onScaleOffsetEdit: (() => void) | null = null;
+
+export function setScaleOffsetEditCallback(cb: (() => void) | null): void {
+  onScaleOffsetEdit = cb;
+}
 
 export function getData(): TableFile | null {
   return currentData;
@@ -243,6 +251,7 @@ function commitSO(kind: SOKind, col: number, input: HTMLInputElement): void {
   refreshSOCol(col);
   scheduleRender();
   onChangeCallback?.();
+  onScaleOffsetEdit?.();
 }
 
 function buildSORow(kind: SOKind, label: string, data: TableFile): void {
@@ -339,6 +348,7 @@ export function resetScaleOffset(col: number): void {
   if (oIn) oIn.value = fmtSO(0);
   refreshSOCol(col);
   scheduleRender();
+  onScaleOffsetEdit?.();
 }
 
 // Back to the default: both rows shown, every column at 1.0 / 0.0.
